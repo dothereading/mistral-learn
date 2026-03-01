@@ -392,6 +392,7 @@ LENGTH_TO_DESCRIPTION = {
 
 _active_agent: "TutorAgent | None" = None  # set in main()
 _current_mode: str | None = None  # set wherever pick_mode() succeeds
+_audio_auto: bool = False  # when True, auto-play audio on content generation
 
 _EXIT_COMMANDS = {"quit", "exit", "q", "/exit"}
 
@@ -425,6 +426,18 @@ def checked_input(prompt: str) -> str:
             continue
         if lower == "/model":
             _pick_model()
+            continue
+        if lower == "/stop":
+            _stop_audio()
+            continue
+        if lower == "/audio-on":
+            global _audio_auto
+            _audio_auto = True
+            console.print("  [dim]Auto-audio enabled. Content will be read aloud automatically.[/]")
+            continue
+        if lower == "/audio-off":
+            _audio_auto = False
+            console.print("  [dim]Auto-audio disabled.[/]")
             continue
         return raw
 
@@ -469,6 +482,10 @@ def show_help() -> None:
     table.add_row("/tools", "List custom tools")
     table.add_row("/model", "Switch Mistral model tier")
     table.add_row("/easier", "Simplify the current text (during content lessons)")
+    table.add_row("/audio", "Listen to the current text (during content lessons)")
+    table.add_row("/audio-on", "Auto-play audio when content is generated")
+    table.add_row("/audio-off", "Disable auto-play audio")
+    table.add_row("/stop", "Stop audio playback")
     table.add_row("/reset", "Start fresh session")
     table.add_row("/exit  quit", "Exit")
     console.print()
@@ -854,31 +871,138 @@ def _pick_and_run_mode(agent: TutorAgent) -> None:
         return
 
 
+# ---------------------------------------------------------------------------
+# Background audio generation and playback
+# ---------------------------------------------------------------------------
+import subprocess as _sp
+
+_audio_lock = threading.Lock()
+_audio_cache: dict = {}  # "thread", "path", "player"
+
+
+def _bg_audio_worker(text: str) -> None:
+    """Background worker: generate audio and store the path."""
+    try:
+        from voice.elevenlabs import generate_speech
+        path = generate_speech(text)
+        with _audio_lock:
+            _audio_cache["path"] = path
+    except Exception:
+        with _audio_lock:
+            _audio_cache["path"] = None
+
+
+def _start_bg_audio(text: str) -> None:
+    """Kick off background audio generation."""
+    _stop_audio()
+    with _audio_lock:
+        _audio_cache.clear()
+    t = threading.Thread(target=_bg_audio_worker, args=(text,), daemon=True)
+    with _audio_lock:
+        _audio_cache["thread"] = t
+    t.start()
+
+
+def _play_audio_file(path: str) -> None:
+    """Start afplay in the background (non-blocking)."""
+    _stop_audio()
+    try:
+        proc = _sp.Popen(["afplay", path])
+        with _audio_lock:
+            _audio_cache["player"] = proc
+            _audio_cache["player_path"] = path
+        console.print("  [dim]Playing audio... (type [bold]/stop[/bold] to stop)[/]")
+    except FileNotFoundError:
+        console.print("  [dim yellow]No audio player found (afplay).[/]")
+
+
+def _stop_audio() -> None:
+    """Stop any currently playing audio and clean up all cached files."""
+    with _audio_lock:
+        proc = _audio_cache.pop("player", None)
+        player_path = _audio_cache.pop("player_path", None)
+        cached_path = _audio_cache.pop("path", None)
+    if proc and proc.poll() is None:
+        proc.terminate()
+        console.print("  [dim]Audio stopped.[/]")
+    for p in (player_path, cached_path):
+        if p:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def _play_cached_audio() -> None:
+    """Wait for bg audio to finish, then play it."""
+    with _audio_lock:
+        t = _audio_cache.get("thread")
+    if t is None:
+        console.print("  [dim yellow]No audio queued. Try /audio-on first.[/]")
+        return
+    if isinstance(t, threading.Thread) and t.is_alive():
+        console.print("  [dim]Waiting for audio...[/]")
+        t.join(timeout=30)
+    with _audio_lock:
+        path = _audio_cache.get("path")
+    if not path:
+        console.print("  [dim yellow]Audio generation failed.[/]")
+        return
+    _play_audio_file(path)
+
+
+def _generate_or_play_audio(text: str) -> None:
+    """Synchronously generate then play audio (for manual /audio without auto mode)."""
+    try:
+        from voice.elevenlabs import generate_speech
+        console.print("  [dim]Generating audio...[/]")
+        path = generate_speech(text)
+        _play_audio_file(path)
+    except ImportError:
+        console.print("  [dim yellow]ElevenLabs not configured. Set ELEVENLABS_API_KEY in .env[/]")
+    except Exception as e:
+        console.print(f"  [dim yellow]Audio error: {e}[/]")
+
+
 def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
     """Run the full content-based learning flow after the text is displayed."""
     start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
 
+    # Pre-generate audio in background if auto mode is on
+    if _audio_auto:
+        _start_bg_audio(text_reply)
+        console.print("  [dim]Audio generating in background. Type /audio to listen.[/]")
+
     # Phase 1: Reading
     _phase_banner(1)
-    try:
-        answer = checked_input(
-            "[dim]Press Enter when you're ready for questions, "
-            "or type [bold]/easier[/bold] for a simpler version...[/] "
-        ).lower()
-    except (EOFError, KeyboardInterrupt):
-        answer = ""
-
-    if answer in ("/easier", "easier"):
-        console.print("\n  [dim]Rewriting at a simpler level...[/]")
-        text_reply = agent.chat(content_learning_simplify_prompt())
-        print_response(text_reply)
-        # Re-prefetch questions for the new text
-        start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
-        console.print()
+    while True:
         try:
-            checked_input("[dim]Press Enter when you're ready for questions...[/]")
+            answer = checked_input(
+                "[dim]Press Enter when you're ready for questions, "
+                "[bold]/easier[/bold] for a simpler version, "
+                "or [bold]/audio[/bold] to listen...[/] "
+            ).lower()
         except (EOFError, KeyboardInterrupt):
-            pass
+            answer = ""
+
+        if answer in ("/audio", "audio"):
+            if _audio_auto and _audio_cache.get("thread") is not None:
+                _play_cached_audio()
+            else:
+                _generate_or_play_audio(text_reply)
+            continue
+
+        if answer in ("/easier", "easier"):
+            console.print("\n  [dim]Rewriting at a simpler level...[/]")
+            text_reply = agent.chat(content_learning_simplify_prompt())
+            print_response(text_reply)
+            # Re-prefetch questions for the new text
+            start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
+            continue
+
+        # Moving on to questions — clean up any unused audio
+        _stop_audio()
+        break
 
     # Phase 2: Comprehension MC (kicks off vocab generation in background)
     _phase_banner(2)

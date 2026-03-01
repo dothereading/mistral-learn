@@ -18,50 +18,6 @@ voice/          → ElevenLabs TTS integration
 
 The agent uses Mistral's **Chat Completions API** with client-side tool dispatch. The system prompt is rebuilt every turn with current student state, due reviews, and available sources.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   CLI / Gradio UI                    │
-└────────────────────────┬────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────┐
-│                    TutorAgent                       │
-│                                                     │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────┐  │
-│  │ SOUL.md     │  │ Tools and    │  │ USER.md    │  │
-│  │ personality │  │ SKILL.md's   │  │ student    │  │
-│  │ & philosophy│  │              │  │ profile    │  │
-│  └─────────────┘  └──────────────┘  └────────────┘  │
-│                                                     │
-│  ┌───────────────────────────────────────────────┐  │
-│  │         Dynamic System Prompt Builder         │  │
-│  │   (rebuilt every turn with current state)     │  │
-│  └──────────────────────┬────────────────────────┘  │
-│                         │                           │
-│                         ▼                           │
-│  ┌───────────────────────────────────────────────┐  │
-│  │            Mistral Chat Completions           │  │
-│  │         ┌──────────────────────────┐          │  │
-│  │         │  tool call?              |          │  │
-│  │         │       ▼                  │          │  │
-│  │         │  feed result back        |          │  │
-│  │         │       ▼                  |          │  │
-│  │         │  repeat until pure text  |          │  │
-│  │         └──────────────────────────┘          │  │
-│  └───────────────────────────────────────────────┘  │
-└──────────┬──────────────┬───────────────┬───────────┘
-           │              │               │
-           ▼              ▼               ▼
-    ┌────────────┐ ┌────────────┐ ┌──────────────┐
-    │ SRS (FSRS) │ │  Tools     │ │ File Memory  │
-    │ SQLite DB  │ │ YouTube    │ │ sessions/    │
-    │ vocab +    │ │ Wikipedia  │ │ sources/     │
-    │ grammar    │ │ Dictionary │ │ USER.md      │
-    └────────────┘ │ Sources    │ └──────────────┘
-                   │ Custom …   │
-                   └────────────┘
-```
-
 ## Features
 
 - **Content-based learning** — generates reading passages from topics, URLs, YouTube transcripts, or Wikipedia articles in the target language
@@ -100,12 +56,6 @@ cp .env.example .env
 
 ```bash
 python interfaces/cli.py
-```
-
-**Web** (Gradio UI):
-
-```bash
-python interfaces/web.py
 ```
 
 On first launch the agent will onboard you — ask your target language, level, and interests — then you're ready to go.
