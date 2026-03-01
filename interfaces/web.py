@@ -14,10 +14,10 @@ def respond(message: str, history: list[dict]) -> tuple[str, str | None]:
     return reply, agent.audio_output
 
 
-with gr.Blocks(title="🌍 LangTutor", theme=gr.themes.Soft()) as app:
+with gr.Blocks(title="🌍 LangTutor") as app:
     gr.Markdown("# 🌍 LangTutor\nYour personal language tutor")
 
-    chatbot = gr.Chatbot(type="messages", height=500)
+    chatbot = gr.Chatbot(height=500)
     audio_out = gr.Audio(autoplay=True, visible=False, label="🔊 Pronunciation")
     msg = gr.Textbox(
         placeholder="Type a message...",
@@ -37,4 +37,4 @@ with gr.Blocks(title="🌍 LangTutor", theme=gr.themes.Soft()) as app:
     msg.submit(user_submit, [msg, chatbot], [msg, chatbot, audio_out])
 
 if __name__ == "__main__":
-    app.launch()
+    app.launch(theme=gr.themes.Soft())
