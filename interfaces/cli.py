@@ -427,6 +427,9 @@ def checked_input(prompt: str) -> str:
         if lower == "/model":
             _pick_model()
             continue
+        if lower == "/stop":
+            _stop_audio()
+            continue
         if lower == "/audio-on":
             global _audio_auto
             _audio_auto = True
@@ -482,6 +485,7 @@ def show_help() -> None:
     table.add_row("/audio", "Listen to the current text (during content lessons)")
     table.add_row("/audio-on", "Auto-play audio when content is generated")
     table.add_row("/audio-off", "Disable auto-play audio")
+    table.add_row("/stop", "Stop audio playback")
     table.add_row("/reset", "Start fresh session")
     table.add_row("/exit  quit", "Exit")
     console.print()
@@ -868,10 +872,12 @@ def _pick_and_run_mode(agent: TutorAgent) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Background audio generation
+# Background audio generation and playback
 # ---------------------------------------------------------------------------
+import subprocess as _sp
+
 _audio_lock = threading.Lock()
-_audio_cache: dict[str, str | None] = {}  # "audio" -> file path or None
+_audio_cache: dict = {}  # "thread", "path", "player"
 
 
 def _bg_audio_worker(text: str) -> None:
@@ -888,13 +894,41 @@ def _bg_audio_worker(text: str) -> None:
 
 def _start_bg_audio(text: str) -> None:
     """Kick off background audio generation."""
+    _stop_audio()
     with _audio_lock:
         _audio_cache.clear()
-        _audio_cache["thread"] = None
     t = threading.Thread(target=_bg_audio_worker, args=(text,), daemon=True)
     with _audio_lock:
         _audio_cache["thread"] = t
     t.start()
+
+
+def _play_audio_file(path: str) -> None:
+    """Start afplay in the background (non-blocking)."""
+    _stop_audio()
+    try:
+        proc = _sp.Popen(["afplay", path])
+        with _audio_lock:
+            _audio_cache["player"] = proc
+            _audio_cache["player_path"] = path
+        console.print("  [dim]Playing audio... (type [bold]/stop[/bold] to stop)[/]")
+    except FileNotFoundError:
+        console.print("  [dim yellow]No audio player found (afplay).[/]")
+
+
+def _stop_audio() -> None:
+    """Stop any currently playing audio."""
+    with _audio_lock:
+        proc = _audio_cache.pop("player", None)
+        path = _audio_cache.pop("player_path", None)
+    if proc and proc.poll() is None:
+        proc.terminate()
+        console.print("  [dim]Audio stopped.[/]")
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def _play_cached_audio() -> None:
@@ -912,33 +946,16 @@ def _play_cached_audio() -> None:
     if not path:
         console.print("  [dim yellow]Audio generation failed.[/]")
         return
-    import subprocess
-    try:
-        console.print("  [dim]Playing audio...[/]")
-        subprocess.run(["afplay", path], check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        console.print("  [dim yellow]Audio playback failed.[/]")
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-        with _audio_lock:
-            _audio_cache.clear()
+    _play_audio_file(path)
 
 
 def _generate_or_play_audio(text: str) -> None:
-    """Synchronously generate and play audio (for manual /audio without auto mode)."""
+    """Synchronously generate then play audio (for manual /audio without auto mode)."""
     try:
         from voice.elevenlabs import generate_speech
         console.print("  [dim]Generating audio...[/]")
         path = generate_speech(text)
-        import subprocess
-        subprocess.run(["afplay", path], check=True)
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        _play_audio_file(path)
     except ImportError:
         console.print("  [dim yellow]ElevenLabs not configured. Set ELEVENLABS_API_KEY in .env[/]")
     except Exception as e:
