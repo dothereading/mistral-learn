@@ -860,25 +860,30 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
 
     # Phase 1: Reading
     _phase_banner(1)
-    try:
-        answer = checked_input(
-            "[dim]Press Enter when you're ready for questions, "
-            "or type [bold]/easier[/bold] for a simpler version...[/] "
-        ).lower()
-    except (EOFError, KeyboardInterrupt):
-        answer = ""
-
-    if answer in ("/easier", "easier"):
-        console.print("\n  [dim]Rewriting at a simpler level...[/]")
-        text_reply = agent.chat(content_learning_simplify_prompt())
-        print_response(text_reply)
-        # Re-prefetch questions for the new text
-        start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
-        console.print()
+    while True:
         try:
-            checked_input("[dim]Press Enter when you're ready for questions...[/]")
+            answer = checked_input(
+                "[dim]Press Enter when you're ready for questions, "
+                "[bold]/easier[/bold] for a simpler version, "
+                "or [bold]/audio[/bold] to listen...[/] "
+            ).lower()
         except (EOFError, KeyboardInterrupt):
-            pass
+            answer = ""
+
+        if answer in ("/audio", "audio"):
+            reply = agent.chat(f"[System: Read this text aloud using speak_text.]\n\n{text_reply}")
+            _play_audio(agent)
+            continue
+
+        if answer in ("/easier", "easier"):
+            console.print("\n  [dim]Rewriting at a simpler level...[/]")
+            text_reply = agent.chat(content_learning_simplify_prompt())
+            print_response(text_reply)
+            # Re-prefetch questions for the new text
+            start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
+            continue
+
+        break
 
     # Phase 2: Comprehension MC (kicks off vocab generation in background)
     _phase_banner(2)
