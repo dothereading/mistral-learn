@@ -436,6 +436,27 @@ def print_response(text: str) -> None:
     console.print(panel)
 
 
+def _play_audio(agent: TutorAgent) -> None:
+    """If the agent produced audio, play it with afplay (macOS)."""
+    path = agent.audio_output
+    if not path:
+        return
+    agent.audio_output = None
+    import subprocess
+    try:
+        console.print("  [dim]Playing audio...[/]")
+        subprocess.run(["afplay", path], check=True)
+    except FileNotFoundError:
+        console.print("  [dim yellow]No audio player found (afplay).[/]")
+    except subprocess.CalledProcessError:
+        console.print("  [dim yellow]Audio playback failed.[/]")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def show_help() -> None:
     """Display available commands."""
     table = Table(title="Commands", show_header=True, header_style="bold cyan")
@@ -983,6 +1004,7 @@ def main() -> None:
             reply = agent.chat(msg)
             console.print()
             print_response(reply)
+            _play_audio(agent)
         except SessionExit:
             break
 
