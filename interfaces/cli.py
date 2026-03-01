@@ -9,6 +9,7 @@ from mistralai import Mistral
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
 import config
 from agent.core import TutorAgent
@@ -67,6 +68,22 @@ and the correct answer, give a brief 1-2 sentence explanation in a mix of \
 the target language and English (more target language for advanced students). \
 Reference the specific part of the text that contains the answer. Be kind."""
 
+REVIEW_MC_SYSTEM = """\
+You are a language-learning vocabulary review quiz generator. You receive a \
+JSON list of vocabulary items the student needs to review (each has id, word, \
+translation, context). Generate one multiple-choice question per item.
+
+Rules:
+- Format each question: "En la frase '...context...', ¿qué significa '**word**'?"
+- Options should be in English (testing recognition of meaning).
+- Exactly 4 options per question, only one correct (the translation).
+- Wrong options must be plausible — similar meanings, related concepts.
+- Pass through the item's "id" as "item_id" in each question.
+
+Return ONLY a JSON array. No markdown fences, no commentary. Each element:
+{"question": "...", "options": ["A","B","C","D"], "correct": 0, "item_id": 123}
+where `correct` is the 0-based index of the right answer."""
+
 VOCAB_MC_SYSTEM = """\
 You are a language-learning vocabulary quiz generator. You receive a text \
 that a student has just read and answered comprehension questions about. \
@@ -105,50 +122,47 @@ def _parse_json_response(raw: str) -> list[dict] | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Background prefetch system — generate quiz questions while user is busy
+# ---------------------------------------------------------------------------
 _prefetch_lock = threading.Lock()
-_prefetched_questions: list[dict] | None = None
-_prefetched_text: str | None = None
-_prefetch_thread: threading.Thread | None = None
+_prefetch_slots: dict[str, dict] = {}  # slot_name -> {"thread", "result"}
 
 
-def _prefetch_worker(text: str) -> None:
-    """Background: generate 5 MC questions from just the text."""
-    global _prefetched_questions, _prefetched_text
+def _bg_llm_worker(slot: str, system: str, user: str) -> None:
+    """Background worker: run an LLM call and store the parsed result."""
     try:
-        raw = _llm_call(MC_SYSTEM_PROMPT, text)
-        questions = _parse_json_response(raw)
-        if questions:
-            with _prefetch_lock:
-                _prefetched_questions = questions
-                _prefetched_text = text
+        raw = _llm_call(system, user)
+        parsed = _parse_json_response(raw)
+        with _prefetch_lock:
+            _prefetch_slots[slot]["result"] = parsed
     except Exception:
         pass
 
 
-def start_prefetch(text: str) -> None:
-    """Kick off background MC generation from the adapted text."""
-    global _prefetch_thread, _prefetched_questions, _prefetched_text
+def start_bg_generate(slot: str, system: str, user: str) -> None:
+    """Kick off a background LLM generation in the named slot."""
     with _prefetch_lock:
-        _prefetched_questions = None
-        _prefetched_text = None
-    _prefetch_thread = threading.Thread(
-        target=_prefetch_worker, args=(text,), daemon=True
-    )
-    _prefetch_thread.start()
+        _prefetch_slots[slot] = {"thread": None, "result": None}
+    t = threading.Thread(target=_bg_llm_worker, args=(slot, system, user), daemon=True)
+    with _prefetch_lock:
+        _prefetch_slots[slot]["thread"] = t
+    t.start()
 
 
-def get_prefetched_questions() -> tuple[list[dict] | None, str | None]:
-    """Block until prefetch finishes (or times out). Returns (questions, text)."""
-    global _prefetched_questions, _prefetched_text, _prefetch_thread
-    if _prefetch_thread is not None:
-        _prefetch_thread.join(timeout=30)
+def get_bg_result(slot: str, timeout: float = 30) -> list[dict] | None:
+    """Block until the named slot finishes. Returns parsed questions or None."""
     with _prefetch_lock:
-        qs = _prefetched_questions
-        txt = _prefetched_text
-        _prefetched_questions = None
-        _prefetched_text = None
-        _prefetch_thread = None
-    return qs, txt
+        entry = _prefetch_slots.get(slot)
+    if not entry:
+        return None
+    t = entry.get("thread")
+    if t is not None:
+        t.join(timeout=timeout)
+    with _prefetch_lock:
+        result = entry.get("result")
+        _prefetch_slots.pop(slot, None)
+    return result
 
 
 def _shuffle_options(q: dict) -> dict:
@@ -159,17 +173,27 @@ def _shuffle_options(q: dict) -> dict:
     random.shuffle(indexed)
     options = [text for text, _ in indexed]
     new_correct = next(i for i, (_, is_correct) in enumerate(indexed) if is_correct)
-    return {
+    result = {
         "question": q["question"],
         "options": options,
         "correct": new_correct,
     }
+    # Preserve extra fields (word, translation, context) for vocab quizzes
+    for key in ("word", "translation", "context", "item_id"):
+        if key in q:
+            result[key] = q[key]
+    return result
 
 
 def _run_mc_round(
-    questions: list[dict], text: str, title: str = "Quiz"
+    questions: list[dict], text: str, title: str = "Quiz",
+    on_miss=None,
 ) -> tuple[int, list[dict]]:
-    """Display MC questions one at a time. Returns (score, list_of_missed)."""
+    """Display MC questions one at a time. Returns (score, list_of_missed).
+
+    on_miss(question_dict) is called immediately when a question is missed,
+    before the explanation is shown.
+    """
     questions = [_shuffle_options(q) for q in questions[:5]]
     score = 0
     missed: list[dict] = []
@@ -183,7 +207,7 @@ def _run_mc_round(
         console.print(Panel(body, border_style="yellow", padding=(1, 2)))
 
         try:
-            answer = console.input("[bold cyan]Your answer (1-4):[/] ").strip()
+            answer = checked_input("[bold cyan]Your answer (1-4):[/] ")
             idx = int(answer) - 1
         except (ValueError, EOFError, KeyboardInterrupt):
             idx = -1
@@ -197,6 +221,8 @@ def _run_mc_round(
                 f"  [bold red]Not quite.[/] The answer is: [bold]{correct_text}[/]"
             )
             missed.append(q)
+            if on_miss:
+                on_miss(q)
             user_msg = (
                 f"Text:\n{text}\n\n"
                 f"Question: {q['question']}\n"
@@ -216,17 +242,20 @@ def _run_mc_round(
     return score, missed
 
 
-def run_mc_quiz(agent: TutorAgent) -> str | None:
+def run_mc_quiz(agent: TutorAgent, text: str) -> str | None:
     """Run the comprehension MC quiz. Returns the text for follow-up quizzes."""
     console.print("\n  [dim]Preparing comprehension questions...[/]")
-    questions, text = get_prefetched_questions()
-    if not questions or not text:
+    questions = get_bg_result("mc")
+    if not questions:
         reply = agent.chat(
             "[System: Generate the first multiple-choice question about "
             "the text you wrote. Present one question with 4 options.]"
         )
         print_response(reply)
         return None
+
+    # Kick off vocab question generation while user answers MC
+    start_bg_generate("vocab", VOCAB_MC_SYSTEM, text)
 
     score, _missed = _run_mc_round(questions, text, title="Pregunta")
 
@@ -244,8 +273,11 @@ def run_mc_quiz(agent: TutorAgent) -> str | None:
 def run_vocab_quiz(agent: TutorAgent, text: str) -> None:
     """Run the vocabulary MC quiz. Missed words are auto-added to SRS."""
     console.print("\n  [dim]Preparing vocabulary questions...[/]")
-    raw = _llm_call(VOCAB_MC_SYSTEM, text)
-    questions = _parse_json_response(raw)
+    questions = get_bg_result("vocab")
+    if not questions:
+        # bg wasn't started or failed — try synchronously
+        raw = _llm_call(VOCAB_MC_SYSTEM, text)
+        questions = _parse_json_response(raw)
     if not questions:
         # Fallback: let the agent handle vocab conversationally
         reply = agent.chat(
@@ -255,13 +287,13 @@ def run_vocab_quiz(agent: TutorAgent, text: str) -> None:
         print_response(reply)
         return
 
-    score, missed = _run_mc_round(questions, text, title="Vocab")
-
-    # Auto-add missed vocab to SRS
+    # Add missed vocab to SRS immediately as student misses each one
     from db.srs import add_review_item
     lang = agent.target_language or "es"
     added = 0
-    for q in missed:
+
+    def _on_vocab_miss(q: dict) -> None:
+        nonlocal added
         word = q.get("word")
         translation = q.get("translation")
         context = q.get("context", "")
@@ -273,11 +305,11 @@ def run_vocab_quiz(agent: TutorAgent, text: str) -> None:
                     context=context, category="content-lesson",
                 )
                 added += 1
+                console.print(f"  [dim]📝 Added to review deck:[/] [bold]{word}[/] — {translation}")
             except Exception:
                 pass
 
-    if added:
-        console.print(f"\n  [dim]📝 Added {added} missed word{'s' if added != 1 else ''} to your review deck.[/]")
+    score, missed = _run_mc_round(questions, text, title="Vocab", on_miss=_on_vocab_miss)
 
     agent.history.append({
         "role": "user",
@@ -331,9 +363,14 @@ TOOL_LABELS = {
 SESSION_MODES = [
     ("Content-Based Learning", "📖"),
     ("Knowledge Review", "🔄"),
-    ("Role Play", "🎭"),
     ("Q&A", "❓"),
     ("Custom", "🛠️"),
+]
+
+MODEL_TIERS = [
+    ("mistral-small-latest", "Small", "Fast, cheapest"),
+    ("mistral-medium-latest", "Medium", "Balanced"),
+    ("mistral-large-latest", "Large", "Most capable"),
 ]
 
 CONTENT_LENGTHS = [
@@ -352,6 +389,46 @@ LENGTH_TO_DESCRIPTION = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_active_agent: "TutorAgent | None" = None  # set in main()
+_current_mode: str | None = None  # set wherever pick_mode() succeeds
+
+_EXIT_COMMANDS = {"quit", "exit", "q", "/exit"}
+
+
+class SessionExit(Exception):
+    """Raised when the user types an exit command at any prompt."""
+
+
+def checked_input(prompt: str) -> str:
+    """Like console.input but raises SessionExit on exit commands.
+
+    Also handles slash commands inline so they work at any prompt
+    (pickers, quizzes, etc.) without interrupting the flow.
+    """
+    while True:
+        raw = console.input(prompt).strip()
+        lower = raw.lower()
+        if lower in _EXIT_COMMANDS:
+            raise SessionExit
+        if lower in ("?", "/help"):
+            show_help()
+            continue
+        if lower == "/profile":
+            _show_profile()
+            continue
+        if lower == "/sources":
+            _show_sources()
+            continue
+        if lower == "/tools":
+            _show_tools()
+            continue
+        if lower == "/model":
+            _pick_model()
+            continue
+        return raw
+
+
 def print_response(text: str) -> None:
     """Print an agent response inside a green-bordered panel."""
     md = Markdown(text)
@@ -369,11 +446,108 @@ def show_help() -> None:
     table.add_row("/profile", "View student profile")
     table.add_row("/sources", "List saved sources")
     table.add_row("/tools", "List custom tools")
+    table.add_row("/model", "Switch Mistral model tier")
     table.add_row("/easier", "Simplify the current text (during content lessons)")
     table.add_row("/reset", "Start fresh session")
-    table.add_row("quit", "Exit")
+    table.add_row("/exit  quit", "Exit")
     console.print()
     console.print(table)
+    console.print()
+
+
+def _show_profile() -> None:
+    """Display the student profile."""
+    profile = load_student_profile()
+    if profile:
+        lines = []
+        for key, value in profile.items():
+            if isinstance(value, list):
+                lines.append(f"  [bold]{key}:[/] {', '.join(str(v) for v in value)}")
+            else:
+                lines.append(f"  [bold]{key}:[/] {value}")
+        console.print()
+        console.print(Panel("\n".join(lines), title="Student Profile", border_style="magenta", padding=(1, 2)))
+    else:
+        console.print("\n  [dim]No profile yet — keep chatting and I'll learn about you![/]")
+    console.print()
+
+
+def _show_sources() -> None:
+    """List saved source files."""
+    sources = list_source_files()
+    if sources:
+        console.print()
+        for s in sources:
+            console.print(f"  [dim]•[/] {s}")
+    else:
+        console.print("\n  [dim]No sources saved yet.[/]")
+    console.print()
+
+
+def _show_tools() -> None:
+    """List custom tools."""
+    from custom_tools import get_custom_tool_info
+
+    tools = get_custom_tool_info()
+    if tools:
+        console.print()
+        for t in tools:
+            console.print(f"  [dim]•[/] [bold]{t['name']}[/] — {t['description']}")
+    else:
+        console.print("\n  [dim]No custom tools yet. Ask the tutor to build one![/]")
+    console.print()
+
+
+_PHASE_NAMES = ["Reading", "Comprehension", "Vocabulary", "Short Answer"]
+
+
+def _phase_banner(phase: int, total: int = 4) -> None:
+    """Print a Rich Rule showing the current lesson phase with progress dots."""
+    dots = []
+    for i in range(1, total + 1):
+        if i < phase:
+            dots.append("[green]●[/]")
+        elif i == phase:
+            dots.append("[bold yellow]●[/]")
+        else:
+            dots.append("[dim]○[/]")
+    progress = "━".join(dots)
+    name = _PHASE_NAMES[phase - 1] if phase <= len(_PHASE_NAMES) else f"Phase {phase}"
+    title = f"Content Lesson  {progress}  {name} ({phase}/{total})"
+    console.print()
+    console.print(Rule(title, style="cyan"))
+
+
+def _input_prompt() -> str:
+    """Return mode-aware input prompt."""
+    if _current_mode == "Content-Based Learning":
+        return "[bold cyan]📖 Content You:[/] "
+    return "[bold cyan]You:[/] "
+
+
+def _pick_model() -> None:
+    """Show model picker and switch if selected."""
+    agent = _active_agent
+    if not agent:
+        return
+    current = agent.model
+    rows = []
+    for i, (model_id, label, desc) in enumerate(MODEL_TIERS, 1):
+        marker = " [bold green]◄[/]" if model_id == current else ""
+        rows.append(f"  [bold][cyan][{i}][/cyan][/bold] {label} — {desc}{marker}")
+    console.print()
+    console.print(Panel("\n".join(rows), title="Model", border_style="cyan", padding=(1, 2)))
+    try:
+        pick = console.input("[bold cyan]Pick a model (1-3):[/] ").strip()
+        idx = int(pick) - 1
+        if 0 <= idx < len(MODEL_TIERS):
+            model_id, label, _ = MODEL_TIERS[idx]
+            agent.model = model_id
+            console.print(f"  [dim]→ Switched to {label} ({model_id})[/]")
+        else:
+            console.print("  [dim]Invalid choice.[/]")
+    except (ValueError, EOFError, KeyboardInterrupt):
+        console.print("  [dim]Cancelled.[/]")
     console.print()
 
 
@@ -385,17 +559,17 @@ def pick_mode() -> str | None:
     body = "\n".join(rows)
     console.print()
     console.print(Panel(body, title="Session Mode", border_style="cyan", padding=(1, 2)))
-    try:
-        choice = console.input("[bold cyan]Pick a mode (1-5):[/] ").strip()
-        idx = int(choice) - 1
-        if 0 <= idx < len(SESSION_MODES):
-            name = SESSION_MODES[idx][0]
-            console.print(f"  [dim]→ {name}[/]")
-            return name
-    except (ValueError, EOFError):
-        pass
-    console.print("  [dim]Invalid choice, skipping.[/]")
-    return None
+    while True:
+        try:
+            choice = checked_input("[bold cyan]Pick a mode (1-4):[/] ")
+            idx = int(choice) - 1
+            if 0 <= idx < len(SESSION_MODES):
+                name = SESSION_MODES[idx][0]
+                console.print(f"  [dim]→ {name}[/]")
+                return name
+        except ValueError:
+            pass
+        console.print("  [dim]Please pick 1-4.[/]")
 
 
 def pick_content_length() -> str | None:
@@ -406,16 +580,17 @@ def pick_content_length() -> str | None:
     body = "\n".join(rows)
     console.print()
     console.print(Panel(body, title="Content Length", border_style="cyan", padding=(1, 2)))
-    try:
-        choice = console.input("[bold cyan]Pick a length (1-3):[/] ").strip()
-        idx = int(choice) - 1
-        if 0 <= idx < len(CONTENT_LENGTHS):
-            label = CONTENT_LENGTHS[idx][0]
-            console.print(f"  [dim]→ {label}[/]")
-            return LENGTH_TO_DESCRIPTION[label]
-    except (ValueError, EOFError):
-        pass
-    return None
+    while True:
+        try:
+            choice = checked_input("[bold cyan]Pick a length (1-3):[/] ")
+            idx = int(choice) - 1
+            if 0 <= idx < len(CONTENT_LENGTHS):
+                label = CONTENT_LENGTHS[idx][0]
+                console.print(f"  [dim]→ {label}[/]")
+                return LENGTH_TO_DESCRIPTION[label]
+        except ValueError:
+            pass
+        console.print("  [dim]Please pick 1-3.[/]")
 
 
 CONTENT_SOURCES = [
@@ -424,6 +599,34 @@ CONTENT_SOURCES = [
     ("Saved source", "📂"),
     ("Generate a story", "📝"),
 ]
+
+
+def _prefetch_url(url: str) -> tuple[str, str | None]:
+    """If the URL can be fetched directly (e.g. YouTube), save it and return
+    ("saved", filename). Otherwise return ("url", url) for the model to handle."""
+    import re as _re
+    from agent.tools import _extract_youtube_id, _add_source
+    yt_id = _extract_youtube_id(url)
+    if yt_id:
+        console.print("  [dim]Fetching transcript...[/]")
+        result = _add_source(url, f"youtube-{yt_id}", None)
+        # Extract actual filename from result like "Saved as sources/foo.txt (...)"
+        m = _re.search(r"Saved as sources/(\S+)", result)
+        if m:
+            filename = m.group(1)
+            console.print(f"  [dim]→ Saved: {filename}[/]")
+            return ("saved", filename)
+    return ("url", url)
+
+
+def _clarify_topic(topic: str) -> str:
+    """If the topic is very short/vague, ask the user to be more specific."""
+    if len(topic.split()) <= 2:
+        console.print(f"  [dim]Topic is a bit broad. Add some detail so I can find better content.[/]")
+        detail = console.input(f"  [bold cyan]More specific (or Enter to keep \"{topic}\"):[/] ").strip()
+        if detail:
+            return detail
+    return topic
 
 
 def pick_content_source() -> tuple[str, str | None]:
@@ -439,36 +642,39 @@ def pick_content_source() -> tuple[str, str | None]:
     console.print()
     console.print(Panel(body, title="Content Source", border_style="cyan", padding=(1, 2)))
     try:
-        choice = console.input("[bold cyan]Pick a source (1-4), or type a topic:[/] ").strip()
+        choice = checked_input("[bold cyan]Pick a source (1-4), or type a topic:[/] ")
         if not choice:
             return ("search", None)
-        # If the user pasted a URL directly, treat as URL
+        # If the user pasted a URL directly
         if choice.startswith(("http://", "https://", "www.")):
             console.print(f"  [dim]→ URL: {choice}[/]")
-            return ("url", choice)
+            return _prefetch_url(choice)
         # Try as a number
         try:
             idx = int(choice) - 1
         except ValueError:
             # Not a number — treat as a search topic
+            choice = _clarify_topic(choice)
             console.print(f"  [dim]→ Searching: {choice}[/]")
             return ("search", choice)
         if idx == 0:
             topic = console.input("[bold cyan]Topic:[/] ").strip()
             if not topic:
                 return ("search", None)
+            topic = _clarify_topic(topic)
             console.print(f"  [dim]→ Searching: {topic}[/]")
             return ("search", topic)
         elif idx == 1:
             url = console.input("[bold cyan]URL:[/] ").strip()
             console.print(f"  [dim]→ URL: {url}[/]")
-            return ("url", url)
+            return _prefetch_url(url)
         elif idx == 2:
             if not sources:
                 console.print("  [dim]No saved sources. Falling back to search.[/]")
                 topic = console.input("[bold cyan]Topic:[/] ").strip()
                 if not topic:
                     return ("search", None)
+                topic = _clarify_topic(topic)
                 console.print(f"  [dim]→ Searching: {topic}[/]")
                 return ("search", topic)
             # Show saved sources for selection
@@ -497,10 +703,14 @@ def mode_to_message(
     length_desc: str | None = None,
     source_type: str | None = None,
     source_input: str | None = None,
+    student_level: str | None = None,
+    target_language: str | None = None,
 ) -> str:
     """Build the message sent to the agent when a mode is picked."""
     if mode == "Content-Based Learning" and length_desc:
-        return content_learning_write_prompt(length_desc, source_type, source_input)
+        return content_learning_write_prompt(
+            length_desc, source_type, source_input, student_level, target_language
+        )
     if mode == "Custom":
         return "[Mode: Custom] Ask the student what they'd like to focus on."
     return f"[Mode: {mode}] Start a {mode} session."
@@ -515,15 +725,125 @@ def on_tool_call(name: str, _arguments: str) -> None:
     console.print(f"  [dim]⚡ {label}...[/]")
 
 
+def _run_knowledge_review(agent: TutorAgent) -> None:
+    """Run a vocab-style MC quiz over SRS items that are due for review."""
+    from db.srs import get_due_reviews, log_review
+
+    due_items = get_due_reviews(agent.db, limit=10, item_type="vocab")
+    if not due_items:
+        console.print()
+        console.print(
+            Panel(
+                "  [bold]Nothing to review right now![/]\n"
+                "  Keep doing content lessons to build your review deck.",
+                border_style="green",
+                padding=(1, 2),
+            )
+        )
+        return
+
+    # Build payload for the LLM
+    payload = [
+        {
+            "id": item["id"],
+            "word": item["word"],
+            "translation": item["translation"],
+            "context": item.get("context", ""),
+        }
+        for item in due_items
+    ]
+
+    console.print("\n  [dim]Preparing review questions...[/]")
+    raw = _llm_call(REVIEW_MC_SYSTEM, json.dumps(payload))
+    questions = _parse_json_response(raw)
+    if not questions:
+        console.print("  [yellow]Couldn't generate quiz. Try again later.[/]")
+        return
+
+    questions = [_shuffle_options(q) for q in questions]
+    score = 0
+    total = len(questions)
+
+    for i, q in enumerate(questions, 1):
+        rows = [f"  [bold]Review {i}/{total}:[/bold] {q['question']}\n"]
+        for j, opt in enumerate(q["options"], 1):
+            rows.append(f"  [bold][cyan][{j}][/cyan][/bold] {opt}")
+        body = "\n".join(rows)
+        console.print()
+        console.print(Panel(body, border_style="yellow", padding=(1, 2)))
+
+        try:
+            answer = checked_input("[bold cyan]Your answer (1-4):[/] ")
+            idx = int(answer) - 1
+        except (ValueError, EOFError, KeyboardInterrupt):
+            idx = -1
+
+        item_id = q.get("item_id")
+        if idx == q["correct"]:
+            score += 1
+            console.print("  [bold green]Correct![/]")
+            if item_id:
+                log_review(agent.db, item_id, rating=4)
+                console.print("  [dim]✅ Reviewed — interval extended[/]")
+        else:
+            correct_text = q["options"][q["correct"]]
+            console.print(
+                f"  [bold red]Not quite.[/] The answer is: [bold]{correct_text}[/]"
+            )
+            if item_id:
+                log_review(agent.db, item_id, rating=1)
+                console.print("  [dim]🔁 Scheduled for sooner review[/]")
+
+    console.print()
+    console.print(
+        Panel(
+            f"  You got [bold]{score}/{total}[/bold] correct!",
+            border_style="green" if score == total else "yellow",
+            padding=(1, 2),
+        )
+    )
+
+
+def _pick_and_run_mode(agent: TutorAgent) -> None:
+    """Show mode picker, run the selected mode, and loop back after content lessons."""
+    global _current_mode
+    while True:
+        mode = pick_mode()
+        if not mode:
+            return
+        _current_mode = mode
+        length_desc = None
+        source_type = None
+        source_input = None
+        if mode == "Knowledge Review":
+            _run_knowledge_review(agent)
+            continue
+        if mode == "Content-Based Learning":
+            length_desc = pick_content_length()
+            source_type, source_input = pick_content_source()
+        reply = agent.chat(mode_to_message(
+            mode, length_desc, source_type, source_input,
+            agent.student_level, agent.target_language_name,
+        ))
+        print_response(reply)
+        if mode == "Content-Based Learning":
+            _run_content_lesson(agent, reply)
+            # After lesson, loop back to menu
+            continue
+        return
+
+
 def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
     """Run the full content-based learning flow after the text is displayed."""
-    start_prefetch(text_reply)
-    console.print()
+    start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
+
+    # Phase 1: Reading
+    _phase_banner(1)
     try:
-        answer = console.input(
+        answer = checked_input(
             "[dim]Press Enter when you're ready for questions, "
             "or type [bold]/easier[/bold] for a simpler version...[/] "
-        ).strip().lower()
+        ).lower()
     except (EOFError, KeyboardInterrupt):
         answer = ""
 
@@ -532,21 +852,34 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
         text_reply = agent.chat(content_learning_simplify_prompt())
         print_response(text_reply)
         # Re-prefetch questions for the new text
-        start_prefetch(text_reply)
+        start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
         console.print()
         try:
-            console.input("[dim]Press Enter when you're ready for questions...[/]")
+            checked_input("[dim]Press Enter when you're ready for questions...[/]")
         except (EOFError, KeyboardInterrupt):
             pass
 
-    # Phase 1: Comprehension MC
-    text = run_mc_quiz(agent)
-    # Phase 2: Vocabulary MC
+    # Phase 2: Comprehension MC (kicks off vocab generation in background)
+    _phase_banner(2)
+    text = run_mc_quiz(agent, text_reply)
+    # Phase 3: Vocabulary MC
     if text:
+        _phase_banner(3)
         run_vocab_quiz(agent, text)
-    # Phase 3: Short answer (agent takes over)
-    sa_reply = agent.chat(content_learning_short_answer_prompt())
-    print_response(sa_reply)
+    # Phase 4: Short answer — exactly 2 questions
+    _phase_banner(4)
+    for i in range(1, 3):
+        sa_reply = agent.chat(content_learning_short_answer_prompt(i))
+        print_response(sa_reply)
+        answer = checked_input(_input_prompt())
+        if not answer:
+            continue
+        feedback = agent.chat(answer)
+        print_response(feedback)
+
+    # Lesson complete
+    console.print()
+    console.print(Rule("[bold green]Lesson Complete[/]", style="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +889,9 @@ def main() -> None:
     console.print(BANNER)
     console.print("  [dim]Your personal language tutor · Type [bold]?[/bold] for commands · [bold]quit[/bold] to exit[/]\n")
 
+    global _active_agent, _current_mode
     agent = TutorAgent()
+    _active_agent = agent
     agent.on_tool_call = on_tool_call
 
     # Agent speaks first
@@ -564,27 +899,18 @@ def main() -> None:
     print_response(opening)
 
     # Show interactive mode picker for returning or new users
-    mode = pick_mode()
-    if mode:
-        length_desc = None
-        source_type = None
-        source_input = None
-        if mode == "Content-Based Learning":
-            length_desc = pick_content_length()
-            source_type, source_input = pick_content_source()
-        msg = mode_to_message(mode, length_desc, source_type, source_input)
-        console.print()
-        reply = agent.chat(msg)
-        print_response(reply)
-        if mode == "Content-Based Learning":
-            _run_content_lesson(agent, reply)
+    try:
+        _pick_and_run_mode(agent)
+    except SessionExit:
+        console.print("\n  [bold green]¡Hasta luego! 👋[/]\n")
+        return
 
     # Main input loop
     while True:
         console.print()
         try:
-            msg = console.input("[bold cyan]You:[/] ").strip()
-        except (EOFError, KeyboardInterrupt):
+            msg = console.input(_input_prompt()).strip()
+        except (EOFError, KeyboardInterrupt, SessionExit):
             break
 
         if not msg:
@@ -593,7 +919,7 @@ def main() -> None:
         lower = msg.lower()
 
         # Exit
-        if lower in ("quit", "exit", "q"):
+        if lower in _EXIT_COMMANDS:
             break
 
         # Commands
@@ -602,78 +928,48 @@ def main() -> None:
             continue
 
         if lower == "/menu":
-            mode = pick_mode()
-            if mode:
-                length_desc = None
-                source_type = None
-                source_input = None
-                if mode == "Content-Based Learning":
-                    length_desc = pick_content_length()
-                    source_type, source_input = pick_content_source()
-                reply = agent.chat(mode_to_message(mode, length_desc, source_type, source_input))
-                print_response(reply)
-                if mode == "Content-Based Learning":
-                    _run_content_lesson(agent, reply)
+            try:
+                _pick_and_run_mode(agent)
+            except SessionExit:
+                break
             continue
 
         if lower == "/profile":
-            profile = load_student_profile()
-            if profile:
-                console.print()
-                console.print(Panel(Markdown(profile), title="Student Profile", border_style="magenta", padding=(1, 2)))
-            else:
-                console.print("\n  [dim]No profile yet — keep chatting and I'll learn about you![/]")
-            console.print()
+            _show_profile()
+            continue
+
+        if lower == "/model":
+            _pick_model()
             continue
 
         if lower == "/sources":
-            sources = list_source_files()
-            if sources:
-                console.print()
-                for s in sources:
-                    console.print(f"  [dim]•[/] {s}")
-            else:
-                console.print("\n  [dim]No sources saved yet.[/]")
-            console.print()
+            _show_sources()
             continue
 
         if lower == "/tools":
-            from custom_tools import get_custom_tool_info
-
-            tools = get_custom_tool_info()
-            if tools:
-                console.print()
-                for t in tools:
-                    console.print(f"  [dim]•[/] [bold]{t['name']}[/] — {t['description']}")
-            else:
-                console.print("\n  [dim]No custom tools yet. Ask the tutor to build one![/]")
-            console.print()
+            _show_tools()
             continue
 
         if lower == "/reset":
-            agent = TutorAgent()
-            agent.on_tool_call = on_tool_call
-            console.print("\n  [dim]Session reset.[/]\n")
-            opening = agent.chat("__session_start__")
-            print_response(opening)
-            mode = pick_mode()
-            if mode:
-                length_desc = None
-                source_type = None
-                source_input = None
-                if mode == "Content-Based Learning":
-                    length_desc = pick_content_length()
-                    source_type, source_input = pick_content_source()
-                reply = agent.chat(mode_to_message(mode, length_desc, source_type, source_input))
-                print_response(reply)
-                if mode == "Content-Based Learning":
-                    _run_content_lesson(agent, reply)
+            try:
+                agent = TutorAgent()
+                _active_agent = agent
+                agent.on_tool_call = on_tool_call
+                console.print("\n  [dim]Session reset.[/]\n")
+                opening = agent.chat("__session_start__")
+                print_response(opening)
+                _pick_and_run_mode(agent)
+            except SessionExit:
+                break
             continue
 
         # Normal message
-        reply = agent.chat(msg)
-        console.print()
-        print_response(reply)
+        try:
+            reply = agent.chat(msg)
+            console.print()
+            print_response(reply)
+        except SessionExit:
+            break
 
     console.print("\n  [bold green]¡Hasta luego! 👋[/]\n")
 
