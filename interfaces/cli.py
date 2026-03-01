@@ -871,8 +871,16 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
             answer = ""
 
         if answer in ("/audio", "audio"):
-            reply = agent.chat(f"[System: Read this text aloud using speak_text.]\n\n{text_reply}")
-            _play_audio(agent)
+            try:
+                from voice.elevenlabs import generate_speech
+                console.print("  [dim]Generating audio...[/]")
+                path = generate_speech(text_reply)
+                agent.audio_output = path
+                _play_audio(agent)
+            except ImportError:
+                console.print("  [dim yellow]ElevenLabs not configured. Set ELEVENLABS_API_KEY in .env[/]")
+            except Exception as e:
+                console.print(f"  [dim yellow]Audio error: {e}[/]")
             continue
 
         if answer in ("/easier", "easier"):
