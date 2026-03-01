@@ -392,6 +392,7 @@ LENGTH_TO_DESCRIPTION = {
 
 _active_agent: "TutorAgent | None" = None  # set in main()
 _current_mode: str | None = None  # set wherever pick_mode() succeeds
+_audio_auto: bool = False  # when True, auto-play audio on content generation
 
 _EXIT_COMMANDS = {"quit", "exit", "q", "/exit"}
 
@@ -425,6 +426,15 @@ def checked_input(prompt: str) -> str:
             continue
         if lower == "/model":
             _pick_model()
+            continue
+        if lower == "/audio-on":
+            global _audio_auto
+            _audio_auto = True
+            console.print("  [dim]Auto-audio enabled. Content will be read aloud automatically.[/]")
+            continue
+        if lower == "/audio-off":
+            _audio_auto = False
+            console.print("  [dim]Auto-audio disabled.[/]")
             continue
         return raw
 
@@ -469,6 +479,9 @@ def show_help() -> None:
     table.add_row("/tools", "List custom tools")
     table.add_row("/model", "Switch Mistral model tier")
     table.add_row("/easier", "Simplify the current text (during content lessons)")
+    table.add_row("/audio", "Listen to the current text (during content lessons)")
+    table.add_row("/audio-on", "Auto-play audio when content is generated")
+    table.add_row("/audio-off", "Disable auto-play audio")
     table.add_row("/reset", "Start fresh session")
     table.add_row("/exit  quit", "Exit")
     console.print()
@@ -854,9 +867,31 @@ def _pick_and_run_mode(agent: TutorAgent) -> None:
         return
 
 
+def _speak_content(text: str) -> None:
+    """Generate and play audio for content text. Swallows errors gracefully."""
+    try:
+        from voice.elevenlabs import generate_speech
+        console.print("  [dim]Generating audio...[/]")
+        path = generate_speech(text)
+        import subprocess
+        subprocess.run(["afplay", path], check=True)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    except ImportError:
+        console.print("  [dim yellow]ElevenLabs not configured. Set ELEVENLABS_API_KEY in .env[/]")
+    except Exception as e:
+        console.print(f"  [dim yellow]Audio error: {e}[/]")
+
+
 def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
     """Run the full content-based learning flow after the text is displayed."""
     start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
+
+    # Auto-play audio if enabled
+    if _audio_auto:
+        _speak_content(text_reply)
 
     # Phase 1: Reading
     _phase_banner(1)
@@ -871,16 +906,7 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
             answer = ""
 
         if answer in ("/audio", "audio"):
-            try:
-                from voice.elevenlabs import generate_speech
-                console.print("  [dim]Generating audio...[/]")
-                path = generate_speech(text_reply)
-                agent.audio_output = path
-                _play_audio(agent)
-            except ImportError:
-                console.print("  [dim yellow]ElevenLabs not configured. Set ELEVENLABS_API_KEY in .env[/]")
-            except Exception as e:
-                console.print(f"  [dim yellow]Audio error: {e}[/]")
+            _speak_content(text_reply)
             continue
 
         if answer in ("/easier", "easier"):
