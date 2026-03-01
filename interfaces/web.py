@@ -7,6 +7,9 @@ from agent.core import TutorAgent
 
 agent = TutorAgent()
 
+# Get the opening message from the agent
+opening = agent.chat("__session_start__")
+
 
 def respond(message: str, history: list[dict]) -> tuple[str, str | None]:
     """Get agent response. Returns (reply_text, audio_path_or_none)."""
@@ -14,10 +17,16 @@ def respond(message: str, history: list[dict]) -> tuple[str, str | None]:
     return reply, agent.audio_output
 
 
-with gr.Blocks(title="🌍 LangTutor") as app:
-    gr.Markdown("# 🌍 LangTutor\nYour personal language tutor")
+with gr.Blocks(title="Mistral Learn") as app:
+    gr.Markdown(
+        "# ✦ MISTRAL LEARN\n"
+        "*Your personal language tutor*"
+    )
 
-    chatbot = gr.Chatbot(height=500)
+    chatbot = gr.Chatbot(
+        value=[{"role": "assistant", "content": opening}],
+        height=500,
+    )
     audio_out = gr.Audio(autoplay=True, visible=False, label="🔊 Pronunciation")
     msg = gr.Textbox(
         placeholder="Type a message...",
