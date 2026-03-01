@@ -32,7 +32,9 @@ def content_learning_write_prompt(
         "feel confident, not overwhelmed. At most 1 unfamiliar word per sentence "
         "for beginners; use high-frequency vocabulary throughout. "
         "Surround any new words with strong context clues so meaning is obvious. "
-        "Output ONLY the text, don't include superfluous text or any commentary."
+        "Output ONLY the text — no questions, no quizzes, no commentary, no instructions. "
+        "Do NOT ask the student anything. Do NOT start a quiz. Just write the reading passage. "
+        "Stick to {length_desc}."
         "You should add a title at the top."
     ).format(length_desc=length_desc, context_hint=context_hint)
 
@@ -162,16 +164,15 @@ def custom_prompt() -> str:
 def _content_learning_mode_prompt() -> str:
     """Mode instructions for Content-Based Learning (injected into system prompt)."""
     return (
-        "The student consumes content (reading or listening) and you ask comprehension "
-        "and vocabulary questions about it. Content can be AI-generated, real content "
-        "via YouTube/Wikipedia/saved sources, or user-provided URLs.\n\n"
+        "The student consumes content (reading or listening). Content can be "
+        "AI-generated, real content via YouTube/Wikipedia/saved sources, or "
+        "user-provided URLs.\n\n"
         "NEVER paste raw source material at the student. ALWAYS rewrite it as an "
         "original text adapted to their level. Load `language-acquisition/SKILL.md` "
         "before writing. Apply i+1 principles.\n\n"
-        "The interface handles comprehension and vocabulary MC quizzes automatically. "
-        "After the quizzes, you take over for short-answer work: open-ended questions "
-        "that get the student producing language naturally. Keep it conversational — "
-        "no grammar jargon. Present one question at a time."
+        "IMPORTANT: Your ONLY job right now is to write the reading passage. "
+        "Do NOT ask questions, do NOT start a quiz, do NOT prompt the student. "
+        "The interface handles all quizzes automatically after the text is displayed."
     )
 
 
