@@ -250,17 +250,29 @@ TOOLS = [
             "name": "update_student_profile",
             "description": (
                 "Update the student's profile with new observations. Call when you "
-                "learn something new about the student's level, interests, or patterns."
+                "learn something new about the student's level, interests, or patterns. "
+                "Pass only the fields you want to set or change."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "updates": {
+                    "language": {
                         "type": "string",
-                        "description": "What to add or change in the student profile (natural language or full profile markdown)",
+                        "description": "Target language, e.g. 'Spanish', 'French'",
+                    },
+                    "variant": {
+                        "type": "string",
+                        "description": "Regional variant, e.g. 'Spain', 'Mexico', 'Brazil'",
+                    },
+                    "level": {
+                        "type": "string",
+                        "description": "CEFR level, e.g. 'A1', 'B2', 'C1'",
+                    },
+                    "goals": {
+                        "type": "string",
+                        "description": "Learning goals, e.g. 'Daily life in Spain'",
                     },
                 },
-                "required": ["updates"],
             },
         },
     },
@@ -464,8 +476,9 @@ def execute_tool(name: str, arguments: str, agent) -> str:
                 return content
 
             case "update_student_profile":
-                updated = update_student_profile(args["updates"])
-                return f"Student profile updated.\n\nCurrent profile:\n{updated}"
+                fields = {k: v for k, v in args.items() if v is not None}
+                updated = update_student_profile(fields)
+                return f"Student profile updated.\n\nCurrent profile:\n{json.dumps(updated)}"
 
             case "speak_text":
                 return _speak_text(args["text"], args.get("language"), agent)
@@ -499,22 +512,23 @@ def execute_tool(name: str, arguments: str, agent) -> str:
 def _search_youtube(query: str, language: str | None = None) -> str:
     """Search YouTube and extract transcript."""
     try:
+        import scrapetube
         from youtube_transcript_api import YouTubeTranscriptApi
 
-        # Search for a video using YouTube's search page
-        search_url = f"https://www.youtube.com/results?search_query={requests.utils.quote(query)}"
-        resp = requests.get(search_url, timeout=10)
-        # Extract video IDs from the response
-        video_ids = re.findall(r"watch\?v=([a-zA-Z0-9_-]{11})", resp.text)
+        # Get real video IDs from YouTube search
+        video_ids = []
+        for video in scrapetube.get_search(query, limit=5):
+            video_ids.append(video["videoId"])
+
         if not video_ids:
             return "No YouTube videos found for that query."
 
-        # Try the first few videos for a transcript
-        for vid in video_ids[:5]:
+        # Try each video for a transcript
+        for vid in video_ids:
             try:
                 languages = [language] if language else ["en"]
-                transcript = YouTubeTranscriptApi.get_transcript(vid, languages=languages)
-                text = " ".join(entry["text"] for entry in transcript)
+                transcript = YouTubeTranscriptApi().fetch(vid, languages=languages)
+                text = " ".join(entry.text for entry in transcript)
                 # Truncate to ~800 words
                 words = text.split()
                 if len(words) > 800:
@@ -529,7 +543,7 @@ def _search_youtube(query: str, language: str | None = None) -> str:
         return "Found videos but couldn't extract transcripts. Try a different query."
 
     except ImportError:
-        return "youtube-transcript-api not installed."
+        return "scrapetube and/or youtube-transcript-api not installed."
     except Exception as e:
         return f"YouTube search error: {e}"
 
@@ -607,9 +621,49 @@ def _lookup_definition(word: str, language: str | None = None) -> str:
         return f"Dictionary lookup error: {e}"
 
 
+def _extract_youtube_id(url: str) -> str | None:
+    """Extract video ID from a YouTube URL, or return None."""
+    m = re.match(
+        r"(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([\w-]{11})",
+        url,
+    )
+    return m.group(1) if m else None
+
+
 def _add_source(url: str, title: str, language: str | None = None) -> str:
     """Fetch a URL and save as a source file."""
     try:
+        # YouTube URLs: extract transcript instead of scraping HTML
+        yt_id = _extract_youtube_id(url)
+        if yt_id:
+            from youtube_transcript_api import YouTubeTranscriptApi
+
+            langs = [language] if language else ["es", "en"]
+            transcript = YouTubeTranscriptApi().fetch(yt_id, languages=langs)
+            text = " ".join(entry.text for entry in transcript)
+            words = text.split()
+            if len(words) > 2000:
+                text = " ".join(words[:2000]) + "..."
+
+            safe_title = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "-").lower()
+            filename = f"{safe_title}.txt"
+            header = (
+                f"---\n"
+                f"title: {title}\n"
+                f"url: https://youtube.com/watch?v={yt_id}\n"
+                f"language: {language or 'unknown'}\n"
+                f"fetched: {datetime.now().isoformat()}\n"
+                f"---\n\n"
+            )
+            save_source(filename, header + text)
+
+            word_count = len(words)
+            preview = " ".join(words[:100]) + "..."
+            return (
+                f"Saved as sources/{filename} ({word_count} words, YouTube transcript).\n\n"
+                f"Preview:\n{preview}"
+            )
+
         resp = requests.get(url, timeout=15, headers={"User-Agent": "MistralLearn/1.0"})
         resp.raise_for_status()
 
