@@ -14,3 +14,7 @@ wheels/
 
 # Claude Code
 .claude/
+
+# Runtime data (user-specific)
+memory/
+db/langtutor.db
