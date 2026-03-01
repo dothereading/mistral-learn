@@ -867,8 +867,68 @@ def _pick_and_run_mode(agent: TutorAgent) -> None:
         return
 
 
-def _speak_content(text: str) -> None:
-    """Generate and play audio for content text. Swallows errors gracefully."""
+# ---------------------------------------------------------------------------
+# Background audio generation
+# ---------------------------------------------------------------------------
+_audio_lock = threading.Lock()
+_audio_cache: dict[str, str | None] = {}  # "audio" -> file path or None
+
+
+def _bg_audio_worker(text: str) -> None:
+    """Background worker: generate audio and store the path."""
+    try:
+        from voice.elevenlabs import generate_speech
+        path = generate_speech(text)
+        with _audio_lock:
+            _audio_cache["path"] = path
+    except Exception:
+        with _audio_lock:
+            _audio_cache["path"] = None
+
+
+def _start_bg_audio(text: str) -> None:
+    """Kick off background audio generation."""
+    with _audio_lock:
+        _audio_cache.clear()
+        _audio_cache["thread"] = None
+    t = threading.Thread(target=_bg_audio_worker, args=(text,), daemon=True)
+    with _audio_lock:
+        _audio_cache["thread"] = t
+    t.start()
+
+
+def _play_cached_audio() -> None:
+    """Wait for bg audio to finish, then play it."""
+    with _audio_lock:
+        t = _audio_cache.get("thread")
+    if t is None:
+        console.print("  [dim yellow]No audio queued. Try /audio-on first.[/]")
+        return
+    if isinstance(t, threading.Thread) and t.is_alive():
+        console.print("  [dim]Waiting for audio...[/]")
+        t.join(timeout=30)
+    with _audio_lock:
+        path = _audio_cache.get("path")
+    if not path:
+        console.print("  [dim yellow]Audio generation failed.[/]")
+        return
+    import subprocess
+    try:
+        console.print("  [dim]Playing audio...[/]")
+        subprocess.run(["afplay", path], check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        console.print("  [dim yellow]Audio playback failed.[/]")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        with _audio_lock:
+            _audio_cache.clear()
+
+
+def _generate_or_play_audio(text: str) -> None:
+    """Synchronously generate and play audio (for manual /audio without auto mode)."""
     try:
         from voice.elevenlabs import generate_speech
         console.print("  [dim]Generating audio...[/]")
@@ -889,9 +949,10 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
     """Run the full content-based learning flow after the text is displayed."""
     start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
 
-    # Auto-play audio if enabled
+    # Pre-generate audio in background if auto mode is on
     if _audio_auto:
-        _speak_content(text_reply)
+        _start_bg_audio(text_reply)
+        console.print("  [dim]Audio generating in background. Type /audio to listen.[/]")
 
     # Phase 1: Reading
     _phase_banner(1)
@@ -906,7 +967,10 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
             answer = ""
 
         if answer in ("/audio", "audio"):
-            _speak_content(text_reply)
+            if _audio_auto and _audio_cache.get("thread") is not None:
+                _play_cached_audio()
+            else:
+                _generate_or_play_audio(text_reply)
             continue
 
         if answer in ("/easier", "easier"):
