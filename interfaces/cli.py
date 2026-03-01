@@ -7,10 +7,22 @@ from rich.markdown import Markdown
 from agent.core import TutorAgent
 
 console = Console()
+
+BANNER = r"""[bold green]
+  ╔╦╗╦╔═╗╔╦╗╦═╗╔═╗╦    ╦  ╔═╗╔═╗╦═╗╔╗╔
+  ║║║║╚═╗ ║ ╠╦╝╠═╣║    ║  ║╣ ╠═╣╠╦╝║║║
+  ╩ ╩╩╚═╝ ╩ ╩╚═╩ ╩╩═╝  ╩═╝╚═╝╩ ╩╩╚═╝╚╝
+[/]"""
+
+console.print(BANNER)
+console.print("  [dim]Your personal language tutor · Type 'quit' to exit[/]\n")
+
 agent = TutorAgent()
 
-console.print("[bold green]🌍 LangTutor[/] — Your personal language tutor")
-console.print("Type 'quit' to exit\n")
+# Agent speaks first
+opening = agent.chat("__session_start__")
+console.print(Markdown(opening))
+console.print()
 
 while True:
     msg = console.input("[bold cyan]You:[/] ")
