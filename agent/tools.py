@@ -264,6 +264,96 @@ TOOLS = [
             },
         },
     },
+    # --- Self-extending meta-tools ---
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_tool",
+            "description": (
+                "Propose building a new custom tool. Describe what it does and what "
+                "parameters it needs. This does NOT build the tool — it stores the "
+                "proposal so the student can review and confirm before building."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Snake_case tool name, e.g. 'fetch_news'",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the tool does (shown in tool list)",
+                    },
+                    "parameters_schema": {
+                        "type": "object",
+                        "description": "JSON Schema for the tool's parameters",
+                    },
+                    "credentials_needed": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "API key names this tool requires, e.g. ['NEWS_API_KEY']",
+                    },
+                    "implementation_notes": {
+                        "type": "string",
+                        "description": "Notes on how to implement the tool",
+                    },
+                },
+                "required": ["name", "description", "parameters_schema"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_tool",
+            "description": (
+                "Build and save a previously proposed custom tool. Call ONLY after "
+                "the student has confirmed the proposal."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Tool name (must match the pending proposal)",
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "Full Python source code with a `def execute(args, agent) -> str` "
+                            "function. Must be self-contained."
+                        ),
+                    },
+                },
+                "required": ["name", "code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "store_credential",
+            "description": (
+                "Store an API key or credential the student provides. "
+                "Saved locally and never sent to the LLM."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key_name": {
+                        "type": "string",
+                        "description": "Credential key, e.g. 'NEWS_API_KEY'",
+                    },
+                    "key_value": {
+                        "type": "string",
+                        "description": "The credential value",
+                    },
+                },
+                "required": ["key_name", "key_value"],
+            },
+        },
+    },
 ]
 
 # Speak text tool — only added if ElevenLabs is configured
@@ -292,9 +382,12 @@ SPEAK_TEXT_TOOL = {
 
 def get_available_tools() -> list[dict]:
     """Return tool schemas, including speak_text only if ElevenLabs is configured."""
+    from custom_tools import get_custom_schemas
+
     tools = list(TOOLS)
     if os.getenv("ELEVENLABS_API_KEY"):
         tools.append(SPEAK_TEXT_TOOL)
+    tools.extend(get_custom_schemas())
     return tools
 
 
@@ -377,7 +470,21 @@ def execute_tool(name: str, arguments: str, agent) -> str:
             case "speak_text":
                 return _speak_text(args["text"], args.get("language"), agent)
 
+            case "propose_tool":
+                return _propose_tool(args, agent)
+
+            case "save_tool":
+                return _save_tool(args, agent)
+
+            case "store_credential":
+                return _store_credential(args)
+
             case _:
+                from custom_tools import execute_custom_tool
+
+                result = execute_custom_tool(name, args, agent)
+                if result is not None:
+                    return result
                 return f"Unknown tool: {name}"
 
     except Exception as e:
@@ -506,15 +613,50 @@ def _add_source(url: str, title: str, language: str | None = None) -> str:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "MistralLearn/1.0"})
         resp.raise_for_status()
 
-        # Basic HTML stripping
+        # Extract main article text from HTML
         text = resp.text
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(text, "html.parser")
-            # Remove script/style
-            for tag in soup(["script", "style", "nav", "header", "footer"]):
+
+            # Remove noisy elements
+            for tag in soup(
+                ["script", "style", "nav", "header", "footer", "aside",
+                 "noscript", "iframe", "form", "button", "svg"]
+            ):
                 tag.decompose()
-            text = soup.get_text(separator="\n", strip=True)
+
+            # Remove Wikipedia-specific cruft
+            for sel in [
+                ".mw-editsection", ".reference", ".reflist", ".refbegin",
+                ".navbox", ".sidebar", ".infobox", ".metadata", ".mbox-small",
+                ".noprint", ".catlinks", ".mw-jump-link", "#toc",
+                ".toc", "#mw-navigation", "#footer", ".mw-indicators",
+                ".external", ".mw-authority-control", ".portal-bar",
+            ]:
+                for el in soup.select(sel):
+                    el.decompose()
+
+            # Prefer <article> or main content div; fall back to <body>
+            main = (
+                soup.find("article")
+                or soup.find("div", id="mw-content-text")
+                or soup.find("div", {"role": "main"})
+                or soup.find("main")
+                or soup.body
+                or soup
+            )
+
+            # Collect only paragraph and heading text
+            parts = []
+            for el in main.find_all(["p", "h1", "h2", "h3", "h4", "li"]):
+                t = el.get_text(separator=" ", strip=True)
+                if t and len(t) > 20:
+                    parts.append(t)
+            text = "\n\n".join(parts) if parts else main.get_text(separator="\n", strip=True)
+
+            # Collapse blank lines
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
         except ImportError:
             # Fallback: basic regex HTML stripping
             text = re.sub(r"<[^>]+>", "", text)
@@ -559,3 +701,60 @@ def _speak_text(text: str, language: str | None, agent) -> str:
         return "ElevenLabs voice module not available."
     except Exception as e:
         return f"Speech generation error: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Self-extending tool implementations
+# ---------------------------------------------------------------------------
+
+
+def _propose_tool(args: dict, agent) -> str:
+    """Store a tool proposal on the agent for user confirmation."""
+    proposal = {
+        "name": args["name"],
+        "description": args["description"],
+        "parameters_schema": args.get("parameters_schema", {"type": "object", "properties": {}}),
+        "credentials_needed": args.get("credentials_needed", []),
+        "implementation_notes": args.get("implementation_notes", ""),
+    }
+    agent._pending_tool_proposal = proposal
+
+    creds = proposal["credentials_needed"]
+    creds_line = f"\nCredentials needed: {', '.join(creds)}" if creds else ""
+
+    params = proposal["parameters_schema"].get("properties", {})
+    params_line = ", ".join(params.keys()) if params else "none"
+
+    return (
+        f"Tool proposal: **{proposal['name']}**\n"
+        f"Description: {proposal['description']}\n"
+        f"Parameters: {params_line}{creds_line}\n\n"
+        f"[Ask the student to confirm]"
+    )
+
+
+def _save_tool(args: dict, agent) -> str:
+    """Build and save a tool after user confirmation."""
+    from custom_tools import _save_and_register_tool
+
+    proposal = getattr(agent, "_pending_tool_proposal", None)
+    if proposal is None:
+        return "No pending tool proposal. Call propose_tool first."
+
+    if proposal["name"] != args["name"]:
+        return (
+            f"Name mismatch: proposal is for `{proposal['name']}` "
+            f"but save_tool was called with `{args['name']}`."
+        )
+
+    result = _save_and_register_tool(proposal, args["code"])
+    agent._pending_tool_proposal = None
+    return result
+
+
+def _store_credential(args: dict) -> str:
+    """Store a credential in the local credential file."""
+    from custom_tools import save_credential
+
+    save_credential(args["key_name"], args["key_value"])
+    return f"Credential `{args['key_name']}` saved."
