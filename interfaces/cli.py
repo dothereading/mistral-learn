@@ -917,18 +917,20 @@ def _play_audio_file(path: str) -> None:
 
 
 def _stop_audio() -> None:
-    """Stop any currently playing audio."""
+    """Stop any currently playing audio and clean up all cached files."""
     with _audio_lock:
         proc = _audio_cache.pop("player", None)
-        path = _audio_cache.pop("player_path", None)
+        player_path = _audio_cache.pop("player_path", None)
+        cached_path = _audio_cache.pop("path", None)
     if proc and proc.poll() is None:
         proc.terminate()
         console.print("  [dim]Audio stopped.[/]")
-    if path:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+    for p in (player_path, cached_path):
+        if p:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def _play_cached_audio() -> None:
@@ -998,6 +1000,8 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
             start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
             continue
 
+        # Moving on to questions — clean up any unused audio
+        _stop_audio()
         break
 
     # Phase 2: Comprehension MC (kicks off vocab generation in background)
