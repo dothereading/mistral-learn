@@ -29,6 +29,12 @@ class TutorAgent:
         self.skill_index = load_file("skills/index.md") or ""
         self.audio_output: str | None = None
         self.current_mode: str | None = None
+        self.on_tool_call: callable | None = None
+        self._pending_tool_proposal: dict | None = None
+
+        from custom_tools import load_all
+
+        load_all()
 
     @property
     def target_language(self) -> str | None:
@@ -104,7 +110,34 @@ class TutorAgent:
 
                 return reply
 
-            # Process tool calls
+            # Validate tool calls — filter out malformed ones
+            valid_tool_calls = []
+            for tc in msg.tool_calls:
+                if re.fullmatch(r"[a-zA-Z0-9_\-.]{1,256}", tc.function.name):
+                    valid_tool_calls.append(tc)
+                elif self.on_tool_call:
+                    self.on_tool_call("__malformed__", tc.function.name[:80])
+
+            if not valid_tool_calls:
+                # All tool calls were malformed; ask the model to retry
+                # Include text from the malformed attempt so context isn't lost
+                messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                })
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "[System: Your tool call failed because the function name "
+                        "was invalid. Remember: call tools by name like "
+                        "add_source, read_source, read_skill, search_youtube, "
+                        "lookup_wikipedia. Arguments go in the arguments object, "
+                        "NOT in the function name. Try again.]"
+                    ),
+                })
+                continue
+
+            # Process valid tool calls
             messages.append({
                 "role": "assistant",
                 "content": msg.content or "",
@@ -117,11 +150,13 @@ class TutorAgent:
                             "arguments": tc.function.arguments,
                         },
                     }
-                    for tc in msg.tool_calls
+                    for tc in valid_tool_calls
                 ],
             })
 
-            for tc in msg.tool_calls:
+            for tc in valid_tool_calls:
+                if self.on_tool_call:
+                    self.on_tool_call(tc.function.name, tc.function.arguments)
                 result = execute_tool(tc.function.name, tc.function.arguments, self)
                 messages.append({
                     "role": "tool",

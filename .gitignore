@@ -18,3 +18,4 @@ wheels/
 # Runtime data (user-specific)
 memory/
 db/langtutor.db
+custom_tools/_credentials.json
