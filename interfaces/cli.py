@@ -898,7 +898,22 @@ def main() -> None:
     opening = agent.chat("__session_start__")
     print_response(opening)
 
-    # Show interactive mode picker for returning or new users
+    # New user: run onboarding conversation before showing mode picker
+    if not agent.profile:
+        while not agent.profile:
+            try:
+                msg = checked_input("[bold cyan]You:[/] ")
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n  [bold green]¡Hasta luego! 👋[/]\n")
+                return
+            if not msg:
+                continue
+            reply = agent.chat(msg)
+            print_response(reply)
+            # Reload profile in case the agent saved it via update_student_profile
+            agent.profile = load_student_profile()
+
+    # Show interactive mode picker
     try:
         _pick_and_run_mode(agent)
     except SessionExit:
