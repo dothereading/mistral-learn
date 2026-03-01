@@ -3,11 +3,15 @@
 import os
 from datetime import date
 
+import yaml
+
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 MEMORY_DIR = os.path.join(BASE_DIR, "memory")
 SOURCES_DIR = os.path.join(BASE_DIR, "sources")
 SOUL_DIR = os.path.join(BASE_DIR, "soul")
 SKILLS_DIR = os.path.join(BASE_DIR, "skills")
+
+_PROFILE_PATH = os.path.join(MEMORY_DIR, "user.yaml")
 
 
 def load_file(relative_path: str) -> str | None:
@@ -19,33 +23,31 @@ def load_file(relative_path: str) -> str | None:
         return f.read()
 
 
-def load_student_profile() -> str | None:
-    """Load memory/USER.md. Returns None if the student is new."""
-    return load_file("memory/USER.md")
+def load_student_profile() -> dict | None:
+    """Load memory/user.yaml as a dict. Returns None if the student is new."""
+    if not os.path.exists(_PROFILE_PATH):
+        return None
+    with open(_PROFILE_PATH, "r") as f:
+        data = yaml.safe_load(f)
+    return data if isinstance(data, dict) else None
 
 
-def save_student_profile(content: str) -> None:
-    """Write the full student profile to memory/USER.md."""
+def save_student_profile(data: dict) -> None:
+    """Write the student profile dict to memory/user.yaml."""
     os.makedirs(MEMORY_DIR, exist_ok=True)
-    path = os.path.join(MEMORY_DIR, "USER.md")
-    with open(path, "w") as f:
-        f.write(content)
+    with open(_PROFILE_PATH, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
-def update_student_profile(updates: str) -> str:
-    """Append observations to the student profile. Creates it if needed.
+def update_student_profile(updates: dict) -> dict:
+    """Merge updates into the existing profile. Creates it if needed.
 
-    Returns the updated profile content.
+    Returns the updated profile dict.
     """
-    current = load_student_profile() or "# Student Profile\n"
-    # If updates look like a full profile replacement (starts with #), overwrite
-    if updates.strip().startswith("# Student Profile"):
-        save_student_profile(updates)
-        return updates
-    # Otherwise append
-    updated = current.rstrip() + "\n" + updates.strip() + "\n"
-    save_student_profile(updated)
-    return updated
+    current = load_student_profile() or {}
+    current.update(updates)
+    save_student_profile(current)
+    return current
 
 
 def save_session_log(content: str, session_date: date | None = None) -> str:

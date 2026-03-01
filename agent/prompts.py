@@ -7,36 +7,48 @@
 
 
 def content_learning_write_prompt(
-    length_desc: str, source_type: str | None, source_input: str | None
+    length_desc: str,
+    source_type: str | None,
+    source_input: str | None,
+    student_level: str | None = None,
+    target_language: str | None = None,
 ) -> str:
     """Build the user message for Content-Based Learning text-writing phase."""
+    context_hint = ""
+    if target_language:
+        context_hint += f"LANGUAGE: Write ENTIRELY in {target_language}. Do NOT write in English. "
+    if student_level:
+        context_hint += f"The student's level is {student_level}. "
     write_rules = (
         "WRITING RULES:\n"
+        "{context_hint}"
         "LENGTH CONSTRAINT — STRICTLY {length_desc}. Do NOT exceed this. "
-        "If the limit is 1 paragraph, write exactly 1 paragraph.\n"
         "Write an ORIGINAL text in the target language. "
+        "Do NOT exhaustively summarize the source — pick the most interesting "
+        "angle or moment and write about it. Be selective: a few vivid "
+        "details beat a dry overview. "
         "Adapt to the student's level (i+1): they should understand ~95-98%. "
         "Err on the side of TOO EASY rather than too hard — the student should "
         "feel confident, not overwhelmed. At most 1 unfamiliar word per sentence "
         "for beginners; use high-frequency vocabulary throughout. "
         "Surround any new words with strong context clues so meaning is obvious. "
-        "Stay on topic — no unrelated analogies from student interests. "
-        "Output ONLY the text. No vocab lists, no questions, no explanations."
-    ).format(length_desc=length_desc)
+        "Output ONLY the text, don't include superfluous text or any commentary."
+        "You should add a title at the top."
+    ).format(length_desc=length_desc, context_hint=context_hint)
 
     if source_type == "search" and source_input:
         return (
             f"[Mode: Content-Based Learning]\n"
-            f"Step 1: Search in the TARGET LANGUAGE — call search_youtube "
-            f"and lookup_wikipedia with the language parameter set to the "
-            f'target language to find information about "{source_input}". '
-            f"Use target-language search terms.\n"
+            f"Step 1: Search in the TARGET LANGUAGE — call lookup_wikipedia "
+            f"with the language parameter set to the target language to find "
+            f'information about "{source_input}". Use target-language search '
+            f"terms. Only call search_youtube if the student specifically "
+            f"asked for a video or YouTube content.\n"
             f"Step 2: {write_rules}\n"
             f"Step 3: After the text, add a short '---\\nFuentes / Sources' "
             f"section with 2-3 markdown hyperlinks to the native-language "
             f"sources you found. Format each as `[descriptive title](url)` "
-            f"— for example `[Video: Mi tema](https://youtube.com/watch?v=...)` "
-            f"or `[Wikipedia: Tema](https://es.wikipedia.org/wiki/...)`. "
+            f"— for example `[Wikipedia: Tema](https://es.wikipedia.org/wiki/...)`. "
             f"The student can click these to explore further."
         )
     elif source_type == "url" and source_input:
@@ -47,6 +59,19 @@ def content_learning_write_prompt(
             f"Step 3: {write_rules}"
         )
     elif source_type == "saved" and source_input:
+        from agent.memory import read_source
+        content = read_source(source_input)
+        if content:
+            # Truncate to ~800 words to keep prompt manageable
+            words = content.split()
+            if len(words) > 800:
+                content = " ".join(words[:800]) + "..."
+            return (
+                f"[Mode: Content-Based Learning]\n"
+                f"SOURCE MATERIAL (use this as the basis for your text):\n"
+                f"---\n{content}\n---\n\n"
+                f"{write_rules}"
+            )
         return (
             f"[Mode: Content-Based Learning]\n"
             f'Step 1: Call read_source with filename="{source_input}" to load the saved content.\n'
@@ -60,21 +85,28 @@ def content_learning_simplify_prompt() -> str:
     """Prompt the agent to rewrite the text at a lower level."""
     return (
         "[System: The student found the text too difficult. Rewrite it at a "
-        "MUCH simpler level — shorter sentences, more common vocabulary, less "
-        "complex grammar. They should understand 98-100% of it. Keep the same "
-        "topic and roughly the same length. Output ONLY the rewritten text, "
+        "simpler level — shorter sentences, more common vocabulary, less "
+        "complex grammar. They should understand or be able to infer everything from context. "
+        "Keep the same topic and roughly the same length. Output ONLY the rewritten text, "
         "nothing else.]"
     )
 
 
-def content_learning_short_answer_prompt() -> str:
+def content_learning_short_answer_prompt(question_num: int = 1) -> str:
     """Build the system injection for the short-answer phase after quizzes."""
+    if question_num == 1:
+        return (
+            "[System: The quizzes are complete. Now ask the student ONE "
+            "short-answer question about the text. Ask them to summarize, "
+            "give an opinion, or describe something from the text in their "
+            "own words. Keep it natural — no grammar jargon. Present one "
+            "question and wait.]"
+        )
     return (
-        "[System: The quizzes are complete. Now ask the student ONE "
-        "short-answer question about the text. Ask them to summarize, "
-        "give an opinion, or describe something from the text in their "
-        "own words. Keep it natural — no grammar jargon. Present one "
-        "question and wait.]"
+        "[System: Ask ONE more short-answer question about the text — "
+        "different from the previous one. Could be an opinion, a comparison, "
+        "or asking them to explain something in their own words. Keep it "
+        "natural. Present the question and wait.]"
     )
 
 
@@ -163,9 +195,23 @@ def _get_mode_instructions(mode: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _format_profile(profile: dict) -> str:
+    """Format a student profile dict into readable text for the system prompt."""
+    lines = ["# Student Profile"]
+    if "language" in profile:
+        lang = profile["language"]
+        variant = profile.get("variant")
+        lines.append(f"Language: {lang} ({variant})" if variant else f"Language: {lang}")
+    if "level" in profile:
+        lines.append(f"Level: {profile['level']}")
+    if "goals" in profile:
+        lines.append(f"Goals: {profile['goals']}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     soul_md: str,
-    student_profile: str | None,
+    student_profile: dict | None,
     skill_index: str,
     due_reviews: list[dict],
     session_history_summary: str | None = None,
@@ -178,15 +224,16 @@ def build_system_prompt(
 
     # Student context
     if student_profile:
-        parts.append(f"## Current Student\n{student_profile}")
+        parts.append(f"## Current Student\n{_format_profile(student_profile)}")
     else:
         parts.append(
             "## New Student\n"
             "No student profile exists. Run the onboarding flow: ask what language "
             "they want to learn, their age bracket (for content appropriateness), "
             "assess their level conversationally, ask about goals and interests. "
-            "Be warm and welcoming. Call `update_student_profile` after each piece "
-            "of information to save it progressively."
+            "Be warm and welcoming. Call `update_student_profile` with structured "
+            "fields (language, variant, level, goals) after each piece "
+            "of information to save it progressively. Do NOT ask about interests."
         )
 
     # Current session mode
@@ -219,7 +266,8 @@ def build_system_prompt(
         sources_text = "\n".join(f"- {s}" for s in available_sources)
         parts.append(
             f"## Available Source Material\n"
-            f"The student has these saved sources you can use for content-based lessons:\n{sources_text}"
+            f"The student has these saved sources you can use for content-based lessons:\n{sources_text}\n"
+            f"Do NOT call `list_sources` — you already have the full list here."
         )
 
     # Skills index

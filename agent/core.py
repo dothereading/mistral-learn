@@ -37,23 +37,54 @@ class TutorAgent:
         load_all()
 
     @property
+    def student_level(self) -> str | None:
+        """Extract student level from profile if available."""
+        if not self.profile:
+            return None
+        return self.profile.get("level")
+
+    # Common language name -> ISO code mapping (covers common cases;
+    # unknown languages fall through as-is so any language works)
+    _LANG_CODE_MAP = {
+        "spanish": "es", "french": "fr", "german": "de",
+        "italian": "it", "portuguese": "pt", "japanese": "ja",
+        "chinese": "zh", "mandarin": "zh", "cantonese": "zh",
+        "korean": "ko", "arabic": "ar", "russian": "ru",
+        "dutch": "nl", "swedish": "sv", "norwegian": "no",
+        "danish": "da", "finnish": "fi", "polish": "pl",
+        "turkish": "tr", "greek": "el", "hebrew": "he",
+        "hindi": "hi", "thai": "th", "vietnamese": "vi",
+        "indonesian": "id", "malay": "ms", "tagalog": "tl",
+        "swahili": "sw", "czech": "cs", "hungarian": "hu",
+        "romanian": "ro", "ukrainian": "uk", "catalan": "ca",
+        "persian": "fa", "farsi": "fa", "bengali": "bn",
+        "urdu": "ur", "tamil": "ta", "telugu": "te",
+    }
+
+    @property
     def target_language(self) -> str | None:
         """Extract target language code from student profile if available."""
         if not self.profile:
             return None
-        # Look for "Target language: <language>" in profile
-        match = re.search(r"[Tt]arget language:\s*(\w+)", self.profile)
-        if match:
-            lang = match.group(1).lower()
-            # Map common names to codes
-            lang_map = {
-                "spanish": "es", "french": "fr", "german": "de",
-                "italian": "it", "portuguese": "pt", "japanese": "ja",
-                "chinese": "zh", "korean": "ko", "arabic": "ar",
-                "russian": "ru", "dutch": "nl", "swedish": "sv",
-            }
-            return lang_map.get(lang, lang)
-        return None
+        lang = self.profile.get("language")
+        if not lang:
+            return None
+        first_word = lang.split()[0].lower()
+        return self._LANG_CODE_MAP.get(first_word, first_word)
+
+    @property
+    def target_language_name(self) -> str | None:
+        """Extract full target language name including variant from profile.
+
+        Returns e.g. "Spanish (Spain)", "Portuguese (Brazil)".
+        """
+        if not self.profile:
+            return None
+        lang = self.profile.get("language")
+        if not lang:
+            return None
+        variant = self.profile.get("variant")
+        return f"{lang} ({variant})" if variant else lang
 
     def _build_messages(self, user_input: str) -> list[dict]:
         """Build the full messages array with dynamic system prompt."""
@@ -102,6 +133,25 @@ class TutorAgent:
             # No tool calls — we have our final response
             if not msg.tool_calls:
                 reply = msg.content or ""
+
+                # Guard: if the model returned a bare tool name instead of a
+                # real response (Mistral quirk after parallel tool calls),
+                # nudge it to actually generate the text.
+                tool_names = {
+                    t["function"]["name"]
+                    for t in get_available_tools()
+                }
+                if reply.strip() in tool_names:
+                    messages.append({"role": "assistant", "content": reply})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[System: You returned a tool name instead of a "
+                            "response. Please generate your actual reply now.]"
+                        ),
+                    })
+                    continue
+
                 self.history.append({"role": "user", "content": user_input})
                 self.history.append({"role": "assistant", "content": reply})
 
