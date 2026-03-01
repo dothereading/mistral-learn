@@ -1,0 +1,3 @@
+- language-acquisition: Core principles of language learning (comprehensible input, i+1, acquisition vs learning, spaced repetition, output hypothesis)
+- teaching-methods: Socratic method, scaffolding, error correction strategies, activity types, the 80/20 rule
+- spanish: Spanish-specific grammar patterns, pronunciation, common English-speaker mistakes, dialect notes, authentic content sources
