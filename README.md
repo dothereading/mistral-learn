@@ -1,7 +1,8 @@
-<img width="540" height="289" alt="Screenshot 2026-03-01 at 15 46 35" src="https://github.com/user-attachments/assets/1265c15f-28ba-4643-a0ca-b4e01966ba7e" />
+<img width="1425" height="856" alt="Screenshot 2026-03-02 at 16 22 19" src="https://github.com/user-attachments/assets/f1280149-8bf2-4197-a053-e37e0e4ac8e8" />
 
+See the 2 min demo [here](https://www.loom.com/share/b60bab3e5a124a529ec91b1943ef8681)!
 
-A personal language tutor agent powered by [Mistral AI](https://mistral.ai/). It acts like a real tutor — not a flashcard app — by generating fresh content around your interests, teaching vocabulary and grammar in context, and running spaced repetition invisibly in the background.
+Mistral Learn is a personal language tutor agent powered by [Mistral AI](https://mistral.ai/). It acts like a real tutor — not a flashcard app — by generating fresh content around your interests, teaching vocabulary and grammar in context, and running spaced repetition invisibly in the background.
 
 ## Architecture
 
