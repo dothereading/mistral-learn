@@ -1,4 +1,5 @@
-# Mistral Learn
+<img width="540" height="289" alt="Screenshot 2026-03-01 at 15 46 35" src="https://github.com/user-attachments/assets/1265c15f-28ba-4643-a0ca-b4e01966ba7e" />
+
 
 A personal language tutor agent powered by [Mistral AI](https://mistral.ai/). It acts like a real tutor — not a flashcard app — by generating fresh content around your interests, teaching vocabulary and grammar in context, and running spaced repetition invisibly in the background.
 
