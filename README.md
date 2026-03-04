@@ -4,11 +4,15 @@ A personal language tutor agent that acts like a real tutor — not a flashcard 
 
 Works with any model via [OpenRouter](https://openrouter.ai/) (default) or directly with [Mistral AI](https://mistral.ai/).
 
-## Features
+## Study Modes
 
 - **Content-based learning** — generates reading passages from topics, URLs, YouTube transcripts, or Wikipedia articles in the target language
 - **Spaced repetition (FSRS)** — vocabulary and grammar are tracked automatically; review is woven into conversation
 - **Language Learning Q&A** — ask about language learning theory, methods, and strategies; the agent references acquisition research and Wikipedia for deeper exploration
+- **Create your own** - tell the agent how you want to study
+
+## Features
+
 - **Dynamic difficulty** — adapts to the student's level; texts can be simplified on the fly
 - **Extensible tools** — YouTube search, Wikipedia lookup, dictionary definitions, source management, and a plugin system for custom tools
 - **Voice support** — optional ElevenLabs TTS for pronunciation
