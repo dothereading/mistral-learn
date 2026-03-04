@@ -5,7 +5,7 @@ import os
 import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from mistralai import Mistral
+from openai import OpenAI
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -18,6 +18,7 @@ from agent.prompts import (
     content_learning_write_prompt,
     content_learning_short_answer_prompt,
     content_learning_simplify_prompt,
+    content_learning_improve_prompt,
 )
 
 console = Console()
@@ -25,13 +26,13 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Lightweight LLM helper (no agent context, no tools, no history)
 # ---------------------------------------------------------------------------
-_llm_client = Mistral(api_key=config.MISTRAL_API_KEY)
+_llm_client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
 
 
 def _llm_call(system: str, user: str) -> str:
     """Single-shot LLM call with just a system prompt and user message."""
-    resp = _llm_client.chat.complete(
-        model=config.MISTRAL_MODEL,
+    resp = _llm_client.chat.completions.create(
+        model=config.MODEL,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -321,19 +322,12 @@ def run_vocab_quiz(agent: TutorAgent, text: str) -> None:
     })
 
 BANNER = r"""[bold green]
-  ███╗   ███╗██╗███████╗████████╗██████╗  █████╗ ██╗
-  ████╗ ████║██║██╔════╝╚══██╔══╝██╔══██╗██╔══██╗██║
-  ██╔████╔██║██║███████╗   ██║   ██████╔╝███████║██║
-  ██║╚██╔╝██║██║╚════██║   ██║   ██╔══██╗██╔══██║██║
-  ██║ ╚═╝ ██║██║███████║   ██║   ██║  ██║██║  ██║███████╗
-  ╚═╝     ╚═╝╚═╝╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
-
-  ██╗     ███████╗ █████╗ ██████╗ ███╗   ██╗
-  ██║     ██╔════╝██╔══██╗██╔══██╗████╗  ██║
-  ██║     █████╗  ███████║██████╔╝██╔██╗ ██║
-  ██║     ██╔══╝  ██╔══██║██╔══██╗██║╚██╗██║
-  ███████╗███████╗██║  ██║██║  ██║██║ ╚████║
-  ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝
+  ██╗███╗   ██╗ ██████╗ ██████╗ ███╗   ██╗████████╗███████╗██╗  ██╗████████╗
+  ██║████╗  ██║██╔════╝██╔═══██╗████╗  ██║╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝
+  ██║██╔██╗ ██║██║     ██║   ██║██╔██╗ ██║   ██║   █████╗   ╚███╔╝    ██║
+  ██║██║╚██╗██║██║     ██║   ██║██║╚██╗██║   ██║   ██╔══╝   ██╔██╗    ██║
+  ██║██║ ╚████║╚██████╗╚██████╔╝██║ ╚████║   ██║   ███████╗██╔╝ ██╗   ██║
+  ╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝
 [/]"""
 
 # ---------------------------------------------------------------------------
@@ -363,15 +357,31 @@ TOOL_LABELS = {
 SESSION_MODES = [
     ("Content-Based Learning", "📖"),
     ("Knowledge Review", "🔄"),
-    ("Q&A", "❓"),
+    ("Language Learning Q&A", "🧠"),
     ("Custom", "🛠️"),
 ]
 
-MODEL_TIERS = [
-    ("mistral-small-latest", "Small", "Fast, cheapest"),
-    ("mistral-medium-latest", "Medium", "Balanced"),
-    ("mistral-large-latest", "Large", "Most capable"),
-]
+def _model_tiers() -> list[tuple[str, str, str]]:
+    """Return model tiers with provider-appropriate model IDs."""
+    if config.PROVIDER == "mistral":
+        return [
+            ("mistral-small-latest", "Small", "Fast, cheapest"),
+            ("mistral-medium-latest", "Medium", "Balanced"),
+            ("mistral-large-latest", "Large", "Most capable"),
+        ]
+    # OpenRouter — multi-vendor selection
+    return [
+        # Google
+        ("google/gemini-3-flash-preview", "Gemini 3 Flash", "Fast, cheap (default)"),
+        ("google/gemini-3.1-pro-preview", "Gemini 3.1 Pro", "Capable, balanced"),
+        # Anthropic
+        ("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5", "Fast, lightweight"),
+        ("anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6", "Strong all-rounder"),
+        ("anthropic/claude-opus-4.6", "Claude Opus 4.6", "Most capable"),
+        # Mistral
+        ("mistralai/mistral-small-creative", "Mistral Small", "Fast, creative"),
+        ("mistralai/mistral-large-2512", "Mistral Large", "Powerful"),
+    ]
 
 CONTENT_LENGTHS = [
     ("Short", "~1 paragraph"),
@@ -395,6 +405,30 @@ _current_mode: str | None = None  # set wherever pick_mode() succeeds
 _audio_auto: bool = False  # when True, auto-play audio on content generation
 
 _EXIT_COMMANDS = {"quit", "exit", "q", "/exit"}
+
+# Phrases that indicate the model couldn't produce content for the topic
+_NO_CONTENT_PHRASES = [
+    "couldn't find",
+    "could not find",
+    "no results",
+    "unable to find",
+    "not find any",
+    "didn't find",
+    "did not find",
+    "no information",
+    "try a different",
+    "try another",
+    "unable to locate",
+]
+
+
+def _reply_is_no_content(reply: str) -> bool:
+    """Return True if the agent reply indicates it failed to find content."""
+    lower = reply.lower()
+    # Short replies are suspicious — real content passages are longer
+    if len(reply.split()) < 40:
+        return any(phrase in lower for phrase in _NO_CONTENT_PHRASES)
+    return False
 
 
 class SessionExit(Exception):
@@ -429,6 +463,9 @@ def checked_input(prompt: str) -> str:
             continue
         if lower == "/stop":
             _stop_audio()
+            continue
+        if lower == "/switch":
+            _toggle_language()
             continue
         if lower == "/audio-on":
             global _audio_auto
@@ -470,6 +507,23 @@ def _play_audio(agent: TutorAgent) -> None:
             pass
 
 
+def _toggle_language() -> None:
+    """Toggle the conversation language for Language Learning Q&A mode."""
+    if not _active_agent:
+        console.print("  [dim yellow]No active session.[/]")
+        return
+    agent = _active_agent
+    current = agent.use_target_language
+    if current is True:
+        agent.use_target_language = False
+        console.print("  [dim]Switched to English / native language.[/]")
+    else:
+        # None (auto) or False → switch to target language
+        agent.use_target_language = True
+        lang = agent.target_language_name or "target language"
+        console.print(f"  [dim]Switched to {lang}.[/]")
+
+
 def show_help() -> None:
     """Display available commands."""
     table = Table(title="Commands", show_header=True, header_style="bold cyan")
@@ -480,11 +534,12 @@ def show_help() -> None:
     table.add_row("/profile", "View student profile")
     table.add_row("/sources", "List saved sources")
     table.add_row("/tools", "List custom tools")
-    table.add_row("/model", "Switch Mistral model tier")
+    table.add_row("/model", "Switch model tier")
     table.add_row("/easier", "Simplify the current text (during content lessons)")
     table.add_row("/audio", "Listen to the current text (during content lessons)")
     table.add_row("/audio-on", "Auto-play audio when content is generated")
     table.add_row("/audio-off", "Disable auto-play audio")
+    table.add_row("/switch", "Toggle conversation language (target ↔ English)")
     table.add_row("/stop", "Stop audio playback")
     table.add_row("/reset", "Start fresh session")
     table.add_row("/exit  quit", "Exit")
@@ -568,18 +623,19 @@ def _pick_model() -> None:
     agent = _active_agent
     if not agent:
         return
+    tiers = _model_tiers()
     current = agent.model
     rows = []
-    for i, (model_id, label, desc) in enumerate(MODEL_TIERS, 1):
+    for i, (model_id, label, desc) in enumerate(tiers, 1):
         marker = " [bold green]◄[/]" if model_id == current else ""
         rows.append(f"  [bold][cyan][{i}][/cyan][/bold] {label} — {desc}{marker}")
     console.print()
     console.print(Panel("\n".join(rows), title="Model", border_style="cyan", padding=(1, 2)))
     try:
-        pick = console.input("[bold cyan]Pick a model (1-3):[/] ").strip()
+        pick = console.input(f"[bold cyan]Pick a model (1-{len(tiers)}):[/] ").strip()
         idx = int(pick) - 1
-        if 0 <= idx < len(MODEL_TIERS):
-            model_id, label, _ = MODEL_TIERS[idx]
+        if 0 <= idx < len(tiers):
+            model_id, label, _ = tiers[idx]
             agent.model = model_id
             console.print(f"  [dim]→ Switched to {label} ({model_id})[/]")
         else:
@@ -663,7 +719,7 @@ def _clarify_topic(topic: str) -> str:
         console.print(f"  [dim]Topic is a bit broad. Add some detail so I can find better content.[/]")
         detail = console.input(f"  [bold cyan]More specific (or Enter to keep \"{topic}\"):[/] ").strip()
         if detail:
-            return detail
+            return f"{topic} {detail}"
     return topic
 
 
@@ -865,7 +921,22 @@ def _pick_and_run_mode(agent: TutorAgent) -> None:
         ))
         print_response(reply)
         if mode == "Content-Based Learning":
-            _run_content_lesson(agent, reply)
+            # If the agent couldn't find content, let the user retry
+            while _reply_is_no_content(reply):
+                console.print()
+                topic = checked_input(
+                    "[bold cyan]Try a different topic (or Enter to skip):[/] "
+                ).strip()
+                if not topic:
+                    break
+                topic = _clarify_topic(topic)
+                reply = agent.chat(mode_to_message(
+                    mode, length_desc, "search", topic,
+                    agent.student_level, agent.target_language_name,
+                ))
+                print_response(reply)
+            else:
+                _run_content_lesson(agent, reply)
             # After lesson, loop back to menu
             continue
         return
@@ -980,23 +1051,37 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
             answer = checked_input(
                 "[dim]Press Enter when you're ready for questions, "
                 "[bold]/easier[/bold] for a simpler version, "
+                "[bold]/improve <topic>[/bold] to mix something in, "
                 "or [bold]/audio[/bold] to listen...[/] "
-            ).lower()
+            )
         except (EOFError, KeyboardInterrupt):
             answer = ""
 
-        if answer in ("/audio", "audio"):
+        lower = answer.lower().strip()
+
+        if lower in ("/audio", "audio"):
             if _audio_auto and _audio_cache.get("thread") is not None:
                 _play_cached_audio()
             else:
                 _generate_or_play_audio(text_reply)
             continue
 
-        if answer in ("/easier", "easier"):
+        if lower in ("/easier", "easier"):
             console.print("\n  [dim]Rewriting at a simpler level...[/]")
             text_reply = agent.chat(content_learning_simplify_prompt())
             print_response(text_reply)
             # Re-prefetch questions for the new text
+            start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
+            continue
+
+        if lower.startswith("/improve "):
+            topic = answer[len("/improve "):].strip()
+            if not topic:
+                console.print("  [dim]Usage: /improve <topic>[/]")
+                continue
+            console.print(f"\n  [dim]Reworking text with \"{topic}\"...[/]")
+            text_reply = agent.chat(content_learning_improve_prompt(topic))
+            print_response(text_reply)
             start_bg_generate("mc", MC_SYSTEM_PROMPT, text_reply)
             continue
 

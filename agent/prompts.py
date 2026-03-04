@@ -32,6 +32,11 @@ def content_learning_write_prompt(
         "feel confident, not overwhelmed. At most 1 unfamiliar word per sentence "
         "for beginners; use high-frequency vocabulary throughout. "
         "Surround any new words with strong context clues so meaning is obvious. "
+        "PROPER NOUNS & BRAND NAMES: Never force-translate proper nouns, brand names, "
+        "titles of games/movies/books/songs, or other names that are commonly kept in "
+        "their original language (e.g. 'Magic: The Gathering' stays as-is, not "
+        "'Magia: El Encuentro'). Only use an official localized name if one is widely "
+        "established (e.g. 'La Guerra de las Galaxias' for Star Wars in older Spanish). "
         "Output ONLY the text — no questions, no quizzes, no commentary, no instructions. "
         "Do NOT ask the student anything. Do NOT start a quiz. Just write the reading passage. "
         "Stick to {length_desc}."
@@ -44,8 +49,12 @@ def content_learning_write_prompt(
             f"Step 1: Search in the TARGET LANGUAGE — call lookup_wikipedia "
             f"with the language parameter set to the target language to find "
             f'information about "{source_input}". Use target-language search '
-            f"terms. Only call search_youtube if the student specifically "
+            f"terms. If no results, try searching in English as a fallback. "
+            f"Only call search_youtube if the student specifically "
             f"asked for a video or YouTube content.\n"
+            f"IMPORTANT: Your text MUST be about \"{source_input}\". "
+            f"If you cannot find information, say so — NEVER substitute a "
+            f"different topic.\n"
             f"Step 2: {write_rules}\n"
             f"Step 3: After the text, add a short '---\\nFuentes / Sources' "
             f"section with 2-3 markdown hyperlinks to the native-language "
@@ -91,6 +100,19 @@ def content_learning_simplify_prompt() -> str:
         "complex grammar. They should understand or be able to infer everything from context. "
         "Keep the same topic and roughly the same length. Output ONLY the rewritten text, "
         "nothing else.]"
+    )
+
+
+def content_learning_improve_prompt(topic: str) -> str:
+    """Prompt the agent to rework the text incorporating a new topic."""
+    return (
+        f"[System: The student wants to spice up the text. "
+        f'First, use your tools (lookup_wikipedia, search_youtube) to research '
+        f'"{topic}" if you need more context. Then rewrite the text so that '
+        f'it naturally incorporates something related to "{topic}". Be creative — '
+        f"weave it into the existing story or content in a fun way. "
+        f"Keep the same language, level, and roughly the same length. "
+        f"Output ONLY the rewritten text, nothing else.]"
     )
 
 
@@ -143,13 +165,51 @@ def roleplay_prompt() -> str:
     )
 
 
-def qa_prompt() -> str:
-    """Mode instructions for Q&A."""
+def language_learning_qa_prompt(use_target_language: bool | None = None) -> str:
+    """Mode instructions for Language Learning Q&A.
+
+    Parameters
+    ----------
+    use_target_language:
+        If *None* (default), the prompt tells the agent to auto-decide based on
+        the student's level (B1+ → target language, below → English/native).
+        If explicitly *True* or *False*, that choice is forced (via ``/switch``).
+    """
+    if use_target_language is True:
+        lang_instruction = (
+            "Conduct this ENTIRE conversation in the student's target language. "
+            "Use simple phrasing so the discussion itself becomes comprehensible "
+            "input. Only fall back to English for technical terms that have no "
+            "natural equivalent."
+        )
+    elif use_target_language is False:
+        lang_instruction = (
+            "Conduct this conversation in English (or the student's native "
+            "language). Use target-language terms for key concepts when helpful, "
+            "but explain everything in English."
+        )
+    else:
+        lang_instruction = (
+            "If the student's level is B1 or above, conduct the conversation in "
+            "their target language — this way the discussion itself is "
+            "comprehensible input. For A1/A2 students, use English (or their "
+            "native language) but sprinkle in target-language terms for key "
+            "concepts. The student can type /switch to change this at any time."
+        )
+
     return (
-        "Open-ended. Student asks anything: grammar questions, \"how do you say...\", "
-        "cultural questions, pronunciation help, \"what's the difference between X "
-        'and Y". Answer clearly at their level and turn answers into mini-lessons '
-        "when appropriate."
+        "Teach the student about language learning itself — theory, methods, and "
+        "strategies. Topics include comprehensible input, spaced repetition, "
+        "immersion techniques, acquisition vs. learning, motivation, and study "
+        "design.\n\n"
+        "At the start of the session, load `language-acquisition/SKILL.md` for "
+        "reference so your answers are grounded in established principles.\n\n"
+        "When the student is curious about a concept, use `lookup_wikipedia` to "
+        "pull in deeper information and cite it.\n\n"
+        "Keep explanations practical — always tie theory back to the student's "
+        "own learning journey, level, and goals. Suggest concrete actions they "
+        f"can take.\n\n"
+        f"LANGUAGE: {lang_instruction}"
     )
 
 
@@ -180,15 +240,25 @@ _MODE_PROMPT_MAP: dict[str, callable] = {
     "Content-Based Learning": _content_learning_mode_prompt,
     "Knowledge Review": knowledge_review_prompt,
     "Role Play": roleplay_prompt,
-    "Q&A": qa_prompt,
+    "Language Learning Q&A": language_learning_qa_prompt,
     "Custom": custom_prompt,
 }
 
 
-def _get_mode_instructions(mode: str) -> str:
-    """Look up mode-specific instructions. Returns empty string for unknown modes."""
+def _get_mode_instructions(mode: str, **kwargs) -> str:
+    """Look up mode-specific instructions. Returns empty string for unknown modes.
+
+    Extra *kwargs* are forwarded to mode prompt builders that accept them
+    (e.g. ``language_learning_qa_prompt(use_target_language=...)``).
+    """
     builder = _MODE_PROMPT_MAP.get(mode)
-    return builder() if builder else ""
+    if not builder:
+        return ""
+    import inspect
+    sig = inspect.signature(builder)
+    # Only pass kwargs the builder actually accepts
+    accepted = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return builder(**accepted)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +288,7 @@ def build_system_prompt(
     session_history_summary: str | None = None,
     current_mode: str | None = None,
     available_sources: list[str] | None = None,
+    use_target_language: bool | None = None,
 ) -> str:
     """Build the system prompt from components. Called before every LLM request."""
 
@@ -239,7 +310,9 @@ def build_system_prompt(
 
     # Current session mode
     if current_mode:
-        mode_instructions = _get_mode_instructions(current_mode)
+        mode_instructions = _get_mode_instructions(
+            current_mode, use_target_language=use_target_language,
+        )
         parts.append(f"## Current Mode: {current_mode}\n{mode_instructions}")
     elif student_profile:
         parts.append(
