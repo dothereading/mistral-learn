@@ -1,4 +1,4 @@
-# Mistral Learn: Adaptive Language Learning Agent — Hackathon Build Spec
+# inContext Agent: Adaptive Language Learning Agent — Hackathon Build Spec
 
 ## What This Is
 
@@ -42,7 +42,7 @@ Use `client.chat.complete()` with `tools=` parameter. Full control over messages
 ## Project Structure
 
 ```
-mistral-learn/
+incontext-agent/
 ├── README.md
 ├── requirements.txt
 ├── .env.example                    # MISTRAL_API_KEY, ELEVENLABS_API_KEY (optional)

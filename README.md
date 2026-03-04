@@ -1,60 +1,75 @@
-<img width="1425" height="856" alt="Screenshot 2026-03-02 at 16 22 19" src="https://github.com/user-attachments/assets/f1280149-8bf2-4197-a053-e37e0e4ac8e8" />
+# inContext Agent
 
-See the 2 min demo [here](https://www.loom.com/share/b60bab3e5a124a529ec91b1943ef8681)!
+A personal language tutor agent that acts like a real tutor — not a flashcard app. It generates fresh content around your interests, teaches vocabulary and grammar in context, and runs spaced repetition invisibly in the background.
 
-Mistral Learn is a personal language tutor agent powered by [Mistral AI](https://mistral.ai/). It acts like a real tutor — not a flashcard app — by generating fresh content around your interests, teaching vocabulary and grammar in context, and running spaced repetition invisibly in the background.
+Works with any model via [OpenRouter](https://openrouter.ai/) (default) or directly with [Mistral AI](https://mistral.ai/).
 
-## Architecture
-
-```
-agent/          → Core agent loop, dynamic prompt builder, tool definitions, file-based memory
-db/             → SQLite + FSRS spaced repetition scheduler
-soul/           → SOUL.md — personality, teaching philosophy, interaction rules
-skills/         → Modular SKILL.md files loaded on demand (language acquisition, teaching methods, etc.)
-memory/         → Student profile (USER.md), session logs — all human-readable markdown
-sources/        → Reference material (articles, transcripts) for content generation
-custom_tools/   → Self-extending tool system — drop in a folder with manifest.json + tool.py
-interfaces/     → CLI (Rich) and Web (Gradio) frontends
-voice/          → ElevenLabs TTS integration
-```
-
-The agent uses Mistral's **Chat Completions API** with client-side tool dispatch. The system prompt is rebuilt every turn with current student state, due reviews, and available sources.
-
-## Features
+## Study Modes
 
 - **Content-based learning** — generates reading passages from topics, URLs, YouTube transcripts, or Wikipedia articles in the target language
 - **Spaced repetition (FSRS)** — vocabulary and grammar are tracked automatically; review is woven into conversation
-- **Comprehension & vocabulary quizzes** — multiple-choice questions generated from content the student just read
+- **Language Learning Q&A** — ask about language learning theory, methods, and strategies; the agent references acquisition research and Wikipedia for deeper exploration
+- **Create your own** - tell the agent how you want to study
+
+## Features
+
 - **Dynamic difficulty** — adapts to the student's level; texts can be simplified on the fly
-- **File-based memory** — student profile, session history, and skills stored as readable markdown files
 - **Extensible tools** — YouTube search, Wikipedia lookup, dictionary definitions, source management, and a plugin system for custom tools
 - **Voice support** — optional ElevenLabs TTS for pronunciation
-- **Any language** — works with any language Mistral can generate
+- **Any language** — works with any language the model can generate
+
+## How It Works
+
+### Tools
+
+The agent has ~12 built-in tools that it calls during conversation:
+
+- **Spaced repetition** — `get_due_reviews`, `log_review`, `add_review_item` to silently track and schedule vocabulary/grammar
+- **Content discovery** — `search_youtube`, `lookup_wikipedia`, `lookup_definition` to find lesson material
+- **Source management** — `add_source`, `list_sources`, `read_source` to fetch and save URLs/transcripts as reusable lesson content
+- **Student profile** — `update_student_profile` to record language, level, and goals
+- **Audio** — `speak_text` for ElevenLabs TTS (when configured)
+
+The agent can also extend itself: `propose_tool` and `save_tool` let the agent suggest new custom tools at runtime. Custom tools live in `custom_tools/` as a folder with a `manifest.json` (schema) and `tool.py` (implementation), and are hot-loaded without restart.
+
+### Memory
+
+**SQLite + FSRS** — Vocabulary and grammar items are stored in a SQLite database with full [FSRS](https://github.com/open-spaced-repetition/fsrs4anki) scheduling (stability, difficulty, due dates, lapse tracking). The student never sees the SRS system — it runs invisibly so conversation feels natural, not mechanical.
+
+**File-based config** — Student profile (`memory/user.yaml`) stores language, CEFR level, and goals. Session logs (`memory/sessions/`) are appended daily as markdown. Saved sources (`sources/`) form a personal library of lesson material with YAML frontmatter.
+
+### Skills
+
+Skills are domain-specific teaching knowledge stored as markdown files in `skills/`. The agent loads them on demand — not at startup — when they'd improve a lesson. Current skills include:
+
+- **Language acquisition** — Krashen's comprehensible input, acquisition vs. learning, spaced repetition principles, session design
+- **Teaching methods** — Socratic questioning, scaffolding, error correction strategies, activity sequencing
+- **Spanish** — grammar sequence, ser/estar, preterite/imperfect, common mistakes, pronunciation, cultural notes
+
+Skills are easy to add or edit since they're just markdown files.
 
 ## Getting Started
 
 ### Prerequisites
 
 - Python 3.13+
-- A [Mistral API key](https://console.mistral.ai/)
+- An [OpenRouter API key](https://openrouter.ai/) (default) or a [Mistral API key](https://console.mistral.ai/)
 - (Optional) An [ElevenLabs API key](https://elevenlabs.io/) for voice
 
 ### Setup
 
 ```bash
-git clone <repo-url> && cd mistral-learn
+git clone <repo-url> && cd incontext-agent
 
 # Install dependencies
 pip install -e .
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your MISTRAL_API_KEY (and optionally ELEVENLABS_API_KEY)
+# Edit .env — add your OPENROUTER_API_KEY (or set PROVIDER=mistral and add MISTRAL_API_KEY)
 ```
 
 ### Run
-
-**CLI** (terminal with Rich formatting):
 
 ```bash
 python interfaces/cli.py

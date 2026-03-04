@@ -555,7 +555,7 @@ def _lookup_wikipedia(topic: str, language: str | None = None) -> str:
 
         lang = language or "en"
         wiki = wikipediaapi.Wikipedia(
-            user_agent="MistralLearn/1.0 (language-learning-tutor)",
+            user_agent="InContextAgent/1.0 (language-learning-tutor)",
             language=lang,
         )
         page = wiki.page(topic)
@@ -664,7 +664,7 @@ def _add_source(url: str, title: str, language: str | None = None) -> str:
                 f"Preview:\n{preview}"
             )
 
-        resp = requests.get(url, timeout=15, headers={"User-Agent": "MistralLearn/1.0"})
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "InContextAgent/1.0"})
         resp.raise_for_status()
 
         # Extract main article text from HTML

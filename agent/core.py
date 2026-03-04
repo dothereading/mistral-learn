@@ -3,7 +3,7 @@
 import json
 import re
 
-from mistralai import Mistral
+from openai import OpenAI
 
 import config
 from agent.memory import (
@@ -20,8 +20,8 @@ from db.srs import get_due_reviews
 
 class TutorAgent:
     def __init__(self):
-        self.client = Mistral(api_key=config.MISTRAL_API_KEY)
-        self.model = config.MISTRAL_MODEL
+        self.client = OpenAI(api_key=config.API_KEY, base_url=config.BASE_URL)
+        self.model = config.MODEL
         self.history: list[dict] = []
         self.profile = load_student_profile()
         self.db = init_database()
@@ -29,6 +29,7 @@ class TutorAgent:
         self.skill_index = load_file("skills/index.md") or ""
         self.audio_output: str | None = None
         self.current_mode: str | None = None
+        self.use_target_language: bool | None = None
         self.on_tool_call: callable | None = None
         self._pending_tool_proposal: dict | None = None
 
@@ -102,6 +103,7 @@ class TutorAgent:
             session_history_summary=self._summarize_if_long(),
             current_mode=self.current_mode,
             available_sources=sources if sources else None,
+            use_target_language=self.use_target_language,
         )
 
         trimmed = self._trim_history(max_turns=20)
@@ -121,7 +123,7 @@ class TutorAgent:
 
         max_iterations = 10  # Safety limit on tool call loops
         for _ in range(max_iterations):
-            response = self.client.chat.complete(
+            response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=get_available_tools(),
