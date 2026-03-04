@@ -1,4 +1,4 @@
-# Mistral Learn
+# inContext Agent
 
 A personal language tutor agent powered by [Mistral AI](https://mistral.ai/). It acts like a real tutor — not a flashcard app — by generating fresh content around your interests, teaching vocabulary and grammar in context, and running spaced repetition invisibly in the background.
 
@@ -40,7 +40,7 @@ The agent uses Mistral's **Chat Completions API** with client-side tool dispatch
 ### Setup
 
 ```bash
-git clone <repo-url> && cd mistral-learn
+git clone <repo-url> && cd incontext-agent
 
 # Install dependencies
 pip install -e .

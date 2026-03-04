@@ -17,9 +17,9 @@ def respond(message: str, history: list[dict]) -> tuple[str, str | None]:
     return reply, agent.audio_output
 
 
-with gr.Blocks(title="Mistral Learn") as app:
+with gr.Blocks(title="inContext Agent") as app:
     gr.Markdown(
-        "# ✦ MISTRAL LEARN\n"
+        "# ✦ INCONTEXT AGENT\n"
         "*Your personal language tutor*"
     )
 
