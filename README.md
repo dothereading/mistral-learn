@@ -1,4 +1,4 @@
-# inContext Agent
+<img width="621" height="157" alt="Screenshot 2026-03-04 at 16 32 48" src="https://github.com/user-attachments/assets/2919254e-4097-4fdb-8333-5a5e8a6a1709" />
 
 A personal language tutor agent that acts like a real tutor — not a flashcard app. It generates fresh content around your interests, teaches vocabulary and grammar in context, and runs spaced repetition invisibly in the background.
 
