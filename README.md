@@ -8,7 +8,7 @@ Works with any model via [OpenRouter](https://openrouter.ai/) (default) or direc
 
 - **Content-based learning** — generates reading passages from topics, URLs, YouTube transcripts, or Wikipedia articles in the target language
 - **Spaced repetition (FSRS)** — vocabulary and grammar are tracked automatically; review is woven into conversation
-- **Language Learning Q&A** — ask about language learning theory, methods, and strategies; the agent references acquisition research and Wikipedia for deeper exploration
+- **Language Acquisition Q&A** — learn about how languages are acquired: comprehensible input, immersion, spaced repetition theory, study strategies, and polyglot methods — grounded in research and Wikipedia deep-dives
 - **Create your own** - tell the agent how you want to study
 
 ## Features

@@ -166,7 +166,7 @@ def roleplay_prompt() -> str:
 
 
 def language_learning_qa_prompt(use_target_language: bool | None = None) -> str:
-    """Mode instructions for Language Learning Q&A.
+    """Mode instructions for Language Acquisition Q&A.
 
     Parameters
     ----------
@@ -198,10 +198,13 @@ def language_learning_qa_prompt(use_target_language: bool | None = None) -> str:
         )
 
     return (
-        "Teach the student about language learning itself — theory, methods, and "
-        "strategies. Topics include comprehensible input, spaced repetition, "
-        "immersion techniques, acquisition vs. learning, motivation, and study "
-        "design.\n\n"
+        "This mode is about LANGUAGE ACQUISITION — the science and practice of "
+        "how people learn languages. It is NOT about the target language itself "
+        "(grammar, vocabulary, translation). Do NOT answer target-language "
+        "questions here; redirect those to other modes.\n\n"
+        "Topics include: comprehensible input (Krashen), spaced repetition, "
+        "immersion techniques, acquisition vs. learning, output hypothesis, "
+        "motivation, study design, and polyglot strategies.\n\n"
         "At the start of the session, load `language-acquisition/SKILL.md` for "
         "reference so your answers are grounded in established principles.\n\n"
         "When the student is curious about a concept, use `lookup_wikipedia` to "
@@ -240,7 +243,7 @@ _MODE_PROMPT_MAP: dict[str, callable] = {
     "Content-Based Learning": _content_learning_mode_prompt,
     "Knowledge Review": knowledge_review_prompt,
     "Role Play": roleplay_prompt,
-    "Language Learning Q&A": language_learning_qa_prompt,
+    "Language Acquisition Q&A": language_learning_qa_prompt,
     "Custom": custom_prompt,
 }
 

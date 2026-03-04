@@ -357,7 +357,7 @@ TOOL_LABELS = {
 SESSION_MODES = [
     ("Content-Based Learning", "📖"),
     ("Knowledge Review", "🔄"),
-    ("Language Learning Q&A", "🧠"),
+    ("Language Acquisition Q&A", "🧠"),
     ("Custom", "🛠️"),
 ]
 
@@ -508,7 +508,7 @@ def _play_audio(agent: TutorAgent) -> None:
 
 
 def _toggle_language() -> None:
-    """Toggle the conversation language for Language Learning Q&A mode."""
+    """Toggle the conversation language for Language Acquisition Q&A mode."""
     if not _active_agent:
         console.print("  [dim yellow]No active session.[/]")
         return
