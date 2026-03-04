@@ -807,6 +807,14 @@ def mode_to_message(
         )
     if mode == "Custom":
         return "[Mode: Custom] Ask the student what they'd like to focus on."
+    if mode == "Language Acquisition Q&A":
+        return (
+            "[Mode: Language Acquisition Q&A] The student wants to learn about "
+            "language acquisition — how languages are learned, study methods, "
+            "and research-backed strategies. Start by loading "
+            "`language-acquisition/SKILL.md`, then ask what aspect of language "
+            "acquisition they're curious about."
+        )
     return f"[Mode: {mode}] Start a {mode} session."
 
 
