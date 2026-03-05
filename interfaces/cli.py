@@ -475,15 +475,22 @@ class _SlashCompleter(Completer):
 _slash_completer = _SlashCompleter()
 
 
+def _rich_to_ansi(markup: str) -> str:
+    """Convert a Rich markup string to ANSI escape codes for prompt_toolkit."""
+    temp = Console(file=__import__("io").StringIO(), color_system="truecolor")
+    temp.print(markup, end="")
+    return temp.file.getvalue()
+
+
 def _prompt_input(prompt_text: str) -> str:
     """Read input with slash-command autocompletion.
 
-    *prompt_text* may contain Rich markup — it's printed via Rich first,
-    then prompt_toolkit reads the actual input on the same line.
+    *prompt_text* may contain Rich markup — it's rendered to ANSI and
+    passed directly to prompt_toolkit so it knows the true cursor position.
     """
-    # Print the Rich-formatted prompt without a trailing newline
-    console.print(prompt_text, end="")
-    return pt_prompt("", completer=_slash_completer, complete_while_typing=True)
+    from prompt_toolkit.formatted_text import ANSI
+    ansi_prompt = _rich_to_ansi(prompt_text)
+    return pt_prompt(ANSI(ansi_prompt), completer=_slash_completer, complete_while_typing=True)
 
 
 def checked_input(prompt: str) -> str:
@@ -1176,7 +1183,7 @@ def _run_content_lesson(agent: TutorAgent, text_reply: str) -> None:
 # ---------------------------------------------------------------------------
 def main() -> None:
     console.print(BANNER)
-    console.print("  [dim]Your personal language tutor · Type [bold]?[/bold] for commands · [bold]quit[/bold] to exit[/]\n")
+    console.print("  [dim]Your personal language tutor · Type [bold]?[/bold] for commands · [bold]/exit[/bold] to exit[/]\n")
 
     global _active_agent, _current_mode
     agent = TutorAgent()
