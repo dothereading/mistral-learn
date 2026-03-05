@@ -6,6 +6,8 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from openai import OpenAI
+from prompt_toolkit import prompt as pt_prompt
+from prompt_toolkit.completion import Completer, Completion
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -435,6 +437,55 @@ class SessionExit(Exception):
     """Raised when the user types an exit command at any prompt."""
 
 
+_SLASH_COMMANDS = [
+    ("/help", "Show available commands"),
+    ("/menu", "Pick a session mode"),
+    ("/profile", "View student profile"),
+    ("/sources", "List saved sources"),
+    ("/tools", "List custom tools"),
+    ("/model", "Switch model tier"),
+    ("/easier", "Simplify the current text"),
+    ("/audio", "Listen to the current text"),
+    ("/audio-on", "Auto-play audio"),
+    ("/audio-off", "Disable auto-play audio"),
+    ("/switch", "Toggle conversation language"),
+    ("/stop", "Stop audio playback"),
+    ("/reset", "Start fresh session"),
+    ("/exit", "Exit"),
+    ("/quit", "Exit"),
+]
+
+
+class _SlashCompleter(Completer):
+    """Show slash-command completions when the input starts with '/'."""
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+        for cmd, desc in _SLASH_COMMANDS:
+            if cmd.startswith(text):
+                yield Completion(
+                    cmd,
+                    start_position=-len(text),
+                    display_meta=desc,
+                )
+
+
+_slash_completer = _SlashCompleter()
+
+
+def _prompt_input(prompt_text: str) -> str:
+    """Read input with slash-command autocompletion.
+
+    *prompt_text* may contain Rich markup — it's printed via Rich first,
+    then prompt_toolkit reads the actual input on the same line.
+    """
+    # Print the Rich-formatted prompt without a trailing newline
+    console.print(prompt_text, end="")
+    return pt_prompt("", completer=_slash_completer, complete_while_typing=True)
+
+
 def checked_input(prompt: str) -> str:
     """Like console.input but raises SessionExit on exit commands.
 
@@ -442,7 +493,7 @@ def checked_input(prompt: str) -> str:
     (pickers, quizzes, etc.) without interrupting the flow.
     """
     while True:
-        raw = console.input(prompt).strip()
+        raw = _prompt_input(prompt).strip()
         lower = raw.lower()
         if lower in _EXIT_COMMANDS:
             raise SessionExit
@@ -1162,7 +1213,7 @@ def main() -> None:
     while True:
         console.print()
         try:
-            msg = console.input(_input_prompt()).strip()
+            msg = _prompt_input(_input_prompt()).strip()
         except (EOFError, KeyboardInterrupt, SessionExit):
             break
 
