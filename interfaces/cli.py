@@ -404,7 +404,7 @@ _active_agent: "TutorAgent | None" = None  # set in main()
 _current_mode: str | None = None  # set wherever pick_mode() succeeds
 _audio_auto: bool = False  # when True, auto-play audio on content generation
 
-_EXIT_COMMANDS = {"quit", "exit", "q", "/exit"}
+_EXIT_COMMANDS = {"/quit", "/exit"}
 
 # Phrases that indicate the model couldn't produce content for the topic
 _NO_CONTENT_PHRASES = [
@@ -542,7 +542,7 @@ def show_help() -> None:
     table.add_row("/switch", "Toggle conversation language (target ↔ English)")
     table.add_row("/stop", "Stop audio playback")
     table.add_row("/reset", "Start fresh session")
-    table.add_row("/exit  quit", "Exit")
+    table.add_row("/exit  /quit", "Exit")
     console.print()
     console.print(table)
     console.print()
